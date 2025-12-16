@@ -1,0 +1,54 @@
+{
+    "name": "shammaa/laravel-optimized-queries",
+    "description": "Advanced Laravel query optimizer - Reduce multiple Eloquent queries to a single optimized SQL statement with JSON aggregation. Supports nested relations, callbacks, belongsToMany, polymorphic relations, and caching.",
+    "type": "library",
+    "license": "MIT",
+    "version": "1.0.0",
+    "keywords": [
+        "laravel",
+        "eloquent",
+        "query-optimization",
+        "json-aggregation",
+        "performance",
+        "n+1-problem",
+        "database-optimization"
+    ],
+    "authors": [
+        {
+            "name": "Shadi Shammaa",
+            "email": "shadi.shammaa@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "illuminate/support": "^9.0|^10.0|^11.0|^12.0",
+        "illuminate/database": "^9.0|^10.0|^11.0|^12.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0",
+        "orchestra/testbench": "^8.0|^9.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Shammaa\\LaravelOptimizedQueries\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Shammaa\\LaravelOptimizedQueries\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Shammaa\\LaravelOptimizedQueries\\LaravelOptimizedQueriesServiceProvider"
+            ],
+            "aliases": {
+                "OptimizedQuery": "Shammaa\\LaravelOptimizedQueries\\Facades\\OptimizedQuery"
+            }
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
+
