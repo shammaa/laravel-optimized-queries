@@ -81,24 +81,48 @@ class Article extends Model
 $articles = Article::with(['author', 'category', 'comments', 'tags'])->get();
 
 // Use this (1 query) - Smart auto-detection! 🎯
+// Option 1: Multiple relations in one call (cleaner!)
 $articles = Article::optimized()  // or opt() or optimizedQuery()
+    ->with(['author', 'category', 'comments', 'tags'])  // Auto-detects all types!
+    ->published()                  // Built-in helper (where('published', true))
+    ->latest()                     // Built-in helper
+    ->limit(50)
+    ->get();
+
+// Option 2: Separate calls (also works)
+$articles = Article::optimized()
     ->with('author')              // Auto-detects: BelongsTo -> single relation
     ->with('category')            // Auto-detects: BelongsTo -> single relation
     ->with('comments')            // Auto-detects: HasMany -> collection
     ->with('tags')                // Auto-detects: BelongsToMany -> many-to-many
-    ->published()                  // Built-in helper (where('published', true))
-    ->latest()                     // Built-in helper
+    ->published()
+    ->latest()
     ->limit(50)
     ->get();
 ```
 
 **With explicit columns (recommended for better performance):**
 ```php
+// Option 1: Mixed syntax - specify columns for some relations
 $articles = Article::optimized()  // or opt() for shorter
-    ->with('author', ['id', 'name', 'email'])      // Auto-detects type + explicit columns
-    ->with('category', ['id', 'name', 'slug'])     // Auto-detects type + explicit columns
-    ->with('comments', ['id', 'body', 'created_at']) // Auto-detects HasMany + explicit columns
-    ->with('tags', ['id', 'name', 'slug'])         // Auto-detects BelongsToMany + explicit columns
+    ->with([
+        'author' => ['id', 'name', 'email'],      // Auto-detects type + explicit columns
+        'category' => ['id', 'name', 'slug'],     // Auto-detects type + explicit columns
+        'comments',                                // Auto-detects + auto columns
+        'tags' => ['id', 'name', 'slug']         // Auto-detects BelongsToMany + explicit columns
+    ])
+    ->withCount('comments')
+    ->where('published', true)
+    ->orderBy('created_at', 'desc')
+    ->limit(50)
+    ->get();
+
+// Option 2: Separate calls with explicit columns
+$articles = Article::optimized()
+    ->with('author', ['id', 'name', 'email'])
+    ->with('category', ['id', 'name', 'slug'])
+    ->with('comments', ['id', 'body', 'created_at'])
+    ->with('tags', ['id', 'name', 'slug'])
     ->withCount('comments')
     ->where('published', true)
     ->orderBy('created_at', 'desc')
@@ -240,6 +264,12 @@ $articles = Article::optimized()
     ->get();
 
 // Now: Just use with() - it auto-detects! 🎉
+// Option 1: Array syntax (cleaner!)
+$articles = Article::optimized()
+    ->with(['author', 'category', 'comments', 'tags'])  // Auto-detects all types!
+    ->get();
+
+// Option 2: Separate calls (also works)
 $articles = Article::optimized()
     ->with('author')              // Auto-detects: BelongsTo → single relation
     ->with('comments')            // Auto-detects: HasMany → collection
@@ -248,10 +278,17 @@ $articles = Article::optimized()
 
 // Works with all relation types!
 $user = User::optimized()
-    ->with('profile')            // BelongsTo → single
-    ->with('posts')              // HasMany → collection
-    ->with('roles')              // BelongsToMany → collection
-    ->with('avatar')             // MorphOne → polymorphic
+    ->with(['profile', 'posts', 'roles', 'avatar'])  // All in one call!
+    ->get();
+
+// Mixed syntax with columns
+$articles = Article::optimized()
+    ->with([
+        'author' => ['id', 'name', 'email'],  // Explicit columns
+        'category',                            // Auto columns
+        'comments' => ['id', 'body'],          // Explicit columns
+        'tags'                                 // Auto columns
+    ])
     ->get();
 ```
 
@@ -285,23 +322,34 @@ The old methods still work if you prefer explicit syntax:
 
 **Main method - auto-detects relation type:**
 ```php
-->with(string $relation, array|string|null $columns = null, ?\Closure $callback = null)
+->with(string|array $relations, array|string|null $columns = null, ?\Closure $callback = null)
 ```
 
 **Examples:**
 ```php
-// Auto-detects relation type AND columns from model's $fillable
+// Single relation - auto-detects type AND columns from model's $fillable
 ->with('author')              // BelongsTo → single relation
 ->with('comments')            // HasMany → collection
 ->with('tags')                // BelongsToMany → many-to-many
 ->with('avatar')              // MorphOne → polymorphic
+
+// Multiple relations in one call (cleaner!)
+->with(['author', 'category', 'comments', 'tags'])  // Auto-detects all types!
 
 // With explicit columns (recommended for performance)
 ->with('author', ['id', 'name', 'email'])
 ->with('comments', ['id', 'body', 'created_at'])
 ->with('tags', ['id', 'name', 'slug'])
 
-// With callback (filtering)
+// Mixed syntax - specify columns for some relations
+->with([
+    'author' => ['id', 'name', 'email'],      // Explicit columns
+    'category',                                // Auto columns
+    'comments' => ['id', 'body'],              // Explicit columns
+    'tags'                                     // Auto columns
+])
+
+// With callback (filtering) - only works with single relation
 ->with('comments', ['id', 'body'], function($query) {
     $query->where('approved', true)->orderBy('created_at', 'desc');
 })

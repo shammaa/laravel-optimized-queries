@@ -83,19 +83,56 @@ class OptimizedQueryBuilder
      * - BelongsToMany -> JSON array (many-to-many)
      * - MorphTo, MorphOne, MorphMany -> Polymorphic handling
      * 
+     * Supports multiple syntaxes:
+     * - Single relation: ->with('author')
+     * - Multiple relations: ->with(['author', 'category', 'comments'])
+     * - With columns: ->with('author', ['id', 'name'])
+     * - Mixed: ->with(['author' => ['id', 'name'], 'category', 'comments'])
+     * 
      * Note: If columns are not specified, it will auto-detect from model's $fillable.
-     * To specify columns explicitly, pass them as second parameter:
-     * ->with('author', ['id', 'name', 'email'])
+     *
+     * @param string|array $relations Single relation name or array of relations
+     * @param array|string|null $columns Use ['*'] for auto-detect, or specify columns array (only when $relations is string)
+     * @param \Closure|null $callback Optional callback (only when $relations is string)
+     * @return $this
+     */
+    public function with(string|array $relations, array|string|null $columns = null, ?\Closure $callback = null): self
+    {
+        // If array of relations is passed
+        if (is_array($relations)) {
+            foreach ($relations as $key => $value) {
+                // Support: ['author' => ['id', 'name'], 'category']
+                if (is_string($key) && is_array($value)) {
+                    // Relation name is key, columns are value
+                    $this->loadRelation($key, $value, null);
+                } elseif (is_string($value)) {
+                    // Simple array: ['author', 'category']
+                    $this->loadRelation($value, ['*'], null);
+                } else {
+                    // Invalid format, skip
+                    continue;
+                }
+            }
+            return $this;
+        }
+        
+        // Single relation (original behavior)
+        $columns = $columns ?? ['*'];
+        return $this->loadRelation($relations, $columns, $callback);
+    }
+
+    /**
+     * Load a single relation with auto-detection.
      *
      * @param string $relation
-     * @param array|string|null $columns Use ['*'] for auto-detect, or specify columns array
+     * @param array|string $columns
      * @param \Closure|null $callback
      * @return $this
      */
-    public function with(string $relation, array|string|null $columns = null, ?\Closure $callback = null): self
+    protected function loadRelation(string $relation, array|string $columns, ?\Closure $callback): self
     {
-        // If columns not specified, use auto-detect
-        $columns = $columns ?? ['*'];
+        // Normalize columns
+        $columns = is_string($columns) ? [$columns] : $columns;
         
         // Auto-detect relation type
         $relationType = $this->detectRelationType($relation);
