@@ -6,6 +6,14 @@ namespace Shammaa\LaravelOptimizedQueries\Builders;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Illuminate\Database\Eloquent\Relations\MorphOne;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -67,11 +75,17 @@ class OptimizedQueryBuilder
     }
 
     /**
-     * Short alias for withRelation - easier to type.
+     * Smart relation loader - automatically detects relation type!
+     * 
+     * This method automatically detects the relation type and uses the appropriate handler:
+     * - BelongsTo, HasOne -> JSON object (single relation)
+     * - HasMany -> JSON array (collection)
+     * - BelongsToMany -> JSON array (many-to-many)
+     * - MorphTo, MorphOne, MorphMany -> Polymorphic handling
      * 
      * Note: If columns are not specified, it will auto-detect from model's $fillable.
      * To specify columns explicitly, pass them as second parameter:
-     * ->with('profile', ['id', 'name', 'email'])
+     * ->with('author', ['id', 'name', 'email'])
      *
      * @param string $relation
      * @param array|string|null $columns Use ['*'] for auto-detect, or specify columns array
@@ -82,7 +96,62 @@ class OptimizedQueryBuilder
     {
         // If columns not specified, use auto-detect
         $columns = $columns ?? ['*'];
-        return $this->withRelation($relation, $columns, $callback);
+        
+        // Auto-detect relation type
+        $relationType = $this->detectRelationType($relation);
+        
+        return match ($relationType) {
+            'single' => $this->withRelation($relation, $columns, $callback),
+            'collection' => $this->withCollection($relation, $columns, $callback),
+            'many_to_many' => $this->withManyToMany($relation, $columns, $callback),
+            'polymorphic' => $this->withPolymorphic($relation, $columns, $callback),
+            'nested' => $this->withNested($relation, $columns, $callback),
+            default => $this->withRelation($relation, $columns, $callback), // Fallback to single
+        };
+    }
+
+    /**
+     * Detect the type of relation automatically.
+     *
+     * @param string $relationName
+     * @return string 'single'|'collection'|'many_to_many'|'polymorphic'|'nested'
+     */
+    protected function detectRelationType(string $relationName): string
+    {
+        // Check if it's a nested relation (contains dots)
+        if (str_contains($relationName, '.')) {
+            return 'nested';
+        }
+
+        // Check if relation exists on the model
+        if (!method_exists($this->model, $relationName)) {
+            // If relation doesn't exist, default to single relation
+            return 'single';
+        }
+
+        try {
+            $relation = $this->model->{$relationName}();
+            
+            if (!$relation instanceof Relation) {
+                return 'single'; // Fallback
+            }
+
+            // Detect relation type
+            return match (true) {
+                $relation instanceof BelongsToMany => 'many_to_many',
+                $relation instanceof HasMany => 'collection',
+                $relation instanceof BelongsTo => 'single',
+                $relation instanceof HasOne => 'single',
+                $relation instanceof MorphTo,
+                $relation instanceof MorphOne,
+                $relation instanceof MorphMany => 'polymorphic',
+                default => 'single', // Fallback for unknown types
+            };
+        } catch (\Exception $e) {
+            // If there's an error getting the relation, default to single
+            Log::warning("Could not detect relation type for '{$relationName}': " . $e->getMessage());
+            return 'single';
+        }
     }
 
     /**

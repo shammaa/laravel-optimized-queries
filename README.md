@@ -29,7 +29,8 @@ Transform **5-15 queries** into **1 optimized query** - reducing execution time 
 - ✅ **Pagination** - Built-in pagination support
 - ✅ **Chunking** - Process large datasets efficiently
 - ✅ **Performance Monitoring** - See exact speedup percentage and query reduction
-- ✅ **Simple & Clear API** - Short methods like `with()`, `withMany()`, `optimized()`, `opt()`, `withColumns()`
+- ✅ **Smart Auto-Detection** - `with()` automatically detects relation types (BelongsTo, HasMany, BelongsToMany, etc.)
+- ✅ **Simple & Clear API** - Short methods like `with()`, `optimized()`, `opt()`, `withColumns()`
 - ✅ **Auto Column Detection** - Automatically detects columns from model's `$fillable`
 - ✅ **Explicit Column Control** - Specify columns explicitly for better performance
 
@@ -79,12 +80,12 @@ class Article extends Model
 // Instead of this (5 queries):
 $articles = Article::with(['author', 'category', 'comments', 'tags'])->get();
 
-// Use this (1 query) - Clear and simple syntax:
+// Use this (1 query) - Smart auto-detection! 🎯
 $articles = Article::optimized()  // or opt() or optimizedQuery()
-    ->with('author')              // Auto-detects columns from model's $fillable
-    ->with('category')
-    ->withMany('comments')        // Auto-detects columns from model's $fillable
-    ->withManyToMany('tags')      // Many-to-many relation
+    ->with('author')              // Auto-detects: BelongsTo -> single relation
+    ->with('category')            // Auto-detects: BelongsTo -> single relation
+    ->with('comments')            // Auto-detects: HasMany -> collection
+    ->with('tags')                // Auto-detects: BelongsToMany -> many-to-many
     ->published()                  // Built-in helper (where('published', true))
     ->latest()                     // Built-in helper
     ->limit(50)
@@ -94,10 +95,10 @@ $articles = Article::optimized()  // or opt() or optimizedQuery()
 **With explicit columns (recommended for better performance):**
 ```php
 $articles = Article::optimized()  // or opt() for shorter
-    ->with('author', ['id', 'name', 'email'])      // Specify columns explicitly
-    ->with('category', ['id', 'name', 'slug'])
-    ->withMany('comments', ['id', 'body', 'created_at'])
-    ->withManyToMany('tags', ['id', 'name', 'slug'])
+    ->with('author', ['id', 'name', 'email'])      // Auto-detects type + explicit columns
+    ->with('category', ['id', 'name', 'slug'])     // Auto-detects type + explicit columns
+    ->with('comments', ['id', 'body', 'created_at']) // Auto-detects HasMany + explicit columns
+    ->with('tags', ['id', 'name', 'slug'])         // Auto-detects BelongsToMany + explicit columns
     ->withCount('comments')
     ->where('published', true)
     ->orderBy('created_at', 'desc')
@@ -105,13 +106,13 @@ $articles = Article::optimized()  // or opt() for shorter
     ->get();
 ```
 
-**Or use clearer column syntax:**
+**Or use clearer column syntax (optional - with() works the same):**
 ```php
 $articles = Article::optimized()  // or opt() for shorter
     ->withColumns('author', ['id', 'name', 'email'])     // Very clear!
     ->withColumns('category', ['id', 'name', 'slug'])
-    ->withManyColumns('comments', ['id', 'body', 'created_at'])
-    ->withManyToMany('tags', ['id', 'name', 'slug'])
+    ->withManyColumns('comments', ['id', 'body', 'created_at'])  // Optional: still works
+    ->with('tags', ['id', 'name', 'slug'])               // with() auto-detects BelongsToMany!
     ->published()
     ->latest()
     ->get();
@@ -214,74 +215,138 @@ When you use `->with('profile')` without specifying columns, the package automat
 
 ---
 
+## 🎯 Smart Auto-Detection (NEW!)
+
+**The `with()` method now automatically detects relation types!** You don't need to know if a relation is `belongsTo`, `hasMany`, or `belongsToMany` - the library figures it out for you!
+
+### How It Works
+
+The `with()` method automatically detects the relation type by inspecting the Eloquent relation:
+
+- **BelongsTo, HasOne** → Returns JSON object (single relation)
+- **HasMany** → Returns JSON array (collection)
+- **BelongsToMany** → Returns JSON array (many-to-many)
+- **MorphTo, MorphOne, MorphMany** → Handles polymorphic relations
+- **Nested relations** (e.g., `profile.company`) → Handles nested paths
+
+### Examples
+
+```php
+// Before: You had to know the relation type
+$articles = Article::optimized()
+    ->with('author')              // Had to know it's BelongsTo
+    ->withMany('comments')        // Had to know it's HasMany
+    ->withManyToMany('tags')      // Had to know it's BelongsToMany
+    ->get();
+
+// Now: Just use with() - it auto-detects! 🎉
+$articles = Article::optimized()
+    ->with('author')              // Auto-detects: BelongsTo → single relation
+    ->with('comments')            // Auto-detects: HasMany → collection
+    ->with('tags')                // Auto-detects: BelongsToMany → many-to-many
+    ->get();
+
+// Works with all relation types!
+$user = User::optimized()
+    ->with('profile')            // BelongsTo → single
+    ->with('posts')              // HasMany → collection
+    ->with('roles')              // BelongsToMany → collection
+    ->with('avatar')             // MorphOne → polymorphic
+    ->get();
+```
+
+### Benefits
+
+1. **No More Confusion** - Don't worry about relation types
+2. **Simpler Code** - One method (`with()`) for all relations
+3. **Less Errors** - Can't accidentally use wrong method
+4. **Easier Migration** - Works with any Laravel model
+
+### Backward Compatibility
+
+The old methods still work if you prefer explicit syntax:
+
+```php
+// Old methods (still work, but optional now)
+->withMany('comments')        // Optional: with() works too!
+->withManyToMany('tags')      // Optional: with() works too!
+->withPolymorphic('images')   // Optional: with() works too!
+```
+
+**Recommendation:** Use `with()` for everything - it's simpler and less error-prone!
+
+---
+
 ## 📚 Complete API Reference
 
 ### Loading Relations
 
-#### Single Relations (belongsTo, hasOne)
+#### Smart Relation Loader (Recommended! 🎯)
+
+**Main method - auto-detects relation type:**
+```php
+->with(string $relation, array|string|null $columns = null, ?\Closure $callback = null)
+```
+
+**Examples:**
+```php
+// Auto-detects relation type AND columns from model's $fillable
+->with('author')              // BelongsTo → single relation
+->with('comments')            // HasMany → collection
+->with('tags')                // BelongsToMany → many-to-many
+->with('avatar')              // MorphOne → polymorphic
+
+// With explicit columns (recommended for performance)
+->with('author', ['id', 'name', 'email'])
+->with('comments', ['id', 'body', 'created_at'])
+->with('tags', ['id', 'name', 'slug'])
+
+// With callback (filtering)
+->with('comments', ['id', 'body'], function($query) {
+    $query->where('approved', true)->orderBy('created_at', 'desc');
+})
+
+// Clearer syntax for specifying columns
+->withColumns('author', ['id', 'name', 'email'])
+```
+
+**Note:** `with()` automatically detects:
+- `BelongsTo`, `HasOne` → Returns JSON object
+- `HasMany` → Returns JSON array
+- `BelongsToMany` → Returns JSON array
+- `MorphTo`, `MorphOne`, `MorphMany` → Handles polymorphic
+
+#### Single Relations (belongsTo, hasOne) - Optional Explicit Methods
 
 **Full method:**
 ```php
 ->withRelation(string $relation, array|string $columns = ['*'], ?\Closure $callback = null)
 ```
 
-**Short method (easier!):**
-```php
-->with(string $relation, array|string $columns = ['*'], ?\Closure $callback = null)
-```
-
 **Examples:**
 ```php
-// Basic usage - auto-detects columns from model's $fillable
-->with('profile')
-
-// With explicit columns (recommended for performance)
-->with('profile', ['id', 'name', 'email'])
-
-// Clearer syntax for specifying columns
-->withColumns('profile', ['id', 'name', 'email'])
-
-// With callback (filtering)
-->with('country', ['id', 'name'], function($query) {
-    $query->where('is_active', true);
-})
-
-// Auto-detect vs explicit:
-->with('profile')                    // Auto: uses model's $fillable (slower)
-->with('profile', ['id', 'name'])    // Explicit: faster, more control
+// Explicit single relation (optional - with() works too!)
+->withRelation('profile', ['id', 'name', 'email'])
+->with('profile', ['id', 'name', 'email'])  // Same thing - use this!
 ```
 
-#### Collection Relations (hasMany, hasManyThrough)
+#### Collection Relations (hasMany, hasManyThrough) - Optional Explicit Methods
 
 **Full method:**
 ```php
 ->withCollection(string $relation, array|string $columns = ['*'], ?\Closure $callback = null)
 ```
 
-**Short method (easier!):**
+**Short method:**
 ```php
 ->withMany(string $relation, array|string $columns = ['*'], ?\Closure $callback = null)
 ```
 
 **Examples:**
 ```php
-// Basic usage - auto-detects columns from model's $fillable
-->withMany('promocodes')
-
-// With explicit columns (recommended for performance)
-->withMany('promocodes', ['id', 'code', 'discount'])
-
-// Clearer syntax for specifying columns
-->withManyColumns('promocodes', ['id', 'code', 'discount'])
-
-// With callback
-->withMany('posts', ['id', 'title'], function($query) {
-    $query->where('published', true)->orderBy('created_at', 'desc');
-})
-
-// Auto-detect vs explicit:
-->withMany('promocodes')                           // Auto: uses model's $fillable
-->withMany('promocodes', ['id', 'code'])           // Explicit: faster, more control
+// Explicit collection relation (optional - with() works too!)
+->withMany('comments', ['id', 'body', 'created_at'])
+->with('comments', ['id', 'body', 'created_at'])  // Same thing - use this!
 ```
 
 #### Nested Relations (NEW! Not in alternatives)
@@ -553,11 +618,11 @@ $articles = Article::optimized()
 $articles = Article::optimized()
     ->with('author', ['id', 'name', 'email', 'avatar'])
     ->with('category', ['id', 'name', 'slug'])
-    ->withMany('comments', ['id', 'body', 'created_at'], function($q) {
+    ->with('comments', ['id', 'body', 'created_at'], function($q) {
         $q->where('approved', true)->orderBy('created_at', 'desc');
     })
-    ->withManyToMany('tags', ['id', 'name', 'slug'])
-    ->withMany('images', ['id', 'url', 'alt'])
+    ->with('tags', ['id', 'name', 'slug'])  // Auto-detects BelongsToMany!
+    ->with('images', ['id', 'url', 'alt'])   // Auto-detects HasMany!
     ->withCount('comments')
     ->withCount('images')
     ->where('published', true)
@@ -640,8 +705,8 @@ Article::query()->chunkById(500, function ($articles) {
 ```php
 // Clear method names - easy to understand!
 $articles = Article::optimized()  // or opt() or optimizedQuery()
-    ->with('profile')              // Auto-detects columns
-    ->withMany('promocodes')       // Auto-detects columns
+    ->with('profile')              // Auto-detects type + columns
+    ->with('promocodes')           // Auto-detects HasMany + columns
     ->active()                     // Built-in helper
     ->latest()                      // Built-in helper
     ->get();
@@ -649,7 +714,7 @@ $articles = Article::optimized()  // or opt() or optimizedQuery()
 // With explicit columns (better performance)
 $articles = Article::optimized()  // or opt() for shorter
     ->with('profile', ['id', 'name', 'email'])
-    ->withMany('promocodes', ['id', 'code', 'discount'])
+    ->with('promocodes', ['id', 'code', 'discount'])  // with() auto-detects HasMany!
     ->active()
     ->latest()
     ->get();
@@ -724,8 +789,8 @@ $comparison = PerformanceHelper::compare(
     fn() => Article::optimized()
         ->with('author', ['id', 'name', 'email'])
         ->with('category', ['id', 'name', 'slug'])
-        ->withMany('comments', ['id', 'body', 'created_at'])
-        ->withManyToMany('tags', ['id', 'name', 'slug'])
+        ->with('comments', ['id', 'body', 'created_at'])  // Auto-detects HasMany!
+        ->with('tags', ['id', 'name', 'slug'])            // Auto-detects BelongsToMany!
         ->published()
         ->get()
 );
@@ -804,9 +869,9 @@ $articles = Article::with(['author', 'category', 'comments', 'tags', 'images'])
 $articles = Article::optimized()
     ->with('author', ['id', 'name', 'email'])
     ->with('category', ['id', 'name', 'slug'])
-    ->withMany('comments', ['id', 'body', 'created_at'])
-    ->withManyToMany('tags', ['id', 'name', 'slug'])
-    ->withMany('images', ['id', 'url', 'alt'])
+    ->with('comments', ['id', 'body', 'created_at'])  // Auto-detects HasMany!
+    ->with('tags', ['id', 'name', 'slug'])           // Auto-detects BelongsToMany!
+    ->with('images', ['id', 'url', 'alt'])           // Auto-detects HasMany!
     ->where('published', true)
     ->limit(50)
     ->get();
@@ -848,11 +913,11 @@ $users = User::with([
 $users = User::optimized()
     ->with('profile', ['id', 'name', 'email'])
     ->withNested('company.country', ['id', 'name'])
-    ->withManyToMany('roles', ['id', 'name'])
-    ->withManyToMany('permissions', ['id', 'name'])
-    ->withMany('posts', ['id', 'title'])
-    ->withMany('comments', ['id', 'body'])
-    ->withMany('notifications', ['id', 'message'])
+    ->with('roles', ['id', 'name'])           // Auto-detects BelongsToMany!
+    ->with('permissions', ['id', 'name'])     // Auto-detects BelongsToMany!
+    ->with('posts', ['id', 'title'])          // Auto-detects HasMany!
+    ->with('comments', ['id', 'body'])        // Auto-detects HasMany!
+    ->with('notifications', ['id', 'message']) // Auto-detects HasMany!
     ->where('status', 'active')
     ->get();
 ```
@@ -887,7 +952,7 @@ $articles = Article::with(['author', 'category', 'tags', 'comments'])
 $articles = Article::optimized()
     ->with('author', ['id', 'name'])
     ->with('category', ['id', 'name'])
-    ->withManyToMany('tags', ['id', 'name'])
+    ->with('tags', ['id', 'name'])            // Auto-detects BelongsToMany!
     ->withCount('comments')
     ->where('published', true)
     ->limit(100)
@@ -1001,8 +1066,8 @@ $comparison = PerformanceHelper::compare(
     fn() => Article::optimized()
         ->with('author')
         ->with('category')
-        ->withMany('comments')
-        ->withManyToMany('tags')
+        ->with('comments')    // Auto-detects HasMany!
+        ->with('tags')        // Auto-detects BelongsToMany!
         ->get()
 );
 
@@ -1029,7 +1094,7 @@ The package automatically monitors performance and shows you exactly how much fa
 $articles = Article::opt()
     ->with('author')
     ->with('category')
-    ->withMany('comments')
+    ->with('comments')    // Auto-detects HasMany!
     ->get();
 
 // Get performance stats
@@ -1054,7 +1119,7 @@ $comparison = PerformanceHelper::compare(
     fn() => Article::opt()
         ->with('author')
         ->with('category')
-        ->withMany('comments')
+        ->with('comments')    // Auto-detects HasMany!
         ->get()
 );
 
@@ -1080,7 +1145,7 @@ $comparison['improvement']['time_reduction_percent']; // 62.5
 ```php
 $articles = Article::opt()
     ->with('author')
-    ->withMany('comments')
+    ->with('comments')    // Auto-detects HasMany!
     ->get();
 
 // Get performance after query
@@ -1121,7 +1186,7 @@ The package is designed to handle large datasets efficiently. Here's how:
 $articles = Article::optimized()
     ->with('author')
     ->with('category')
-    ->withMany('comments')
+    ->with('comments')    // Auto-detects HasMany!
     ->where('published', true)
     ->paginate(50); // Only loads 50 records at a time
 
@@ -1158,7 +1223,7 @@ Article::query()
         $data = Article::optimized()
             ->with('author')
             ->with('category')
-            ->withMany('comments')
+            ->with('comments')    // Auto-detects HasMany!
             ->whereIn('id', $ids)
             ->get();
         
@@ -1275,7 +1340,7 @@ public function api()
     $articles = Article::optimized()
         ->with('author', ['id', 'name'])
         ->with('category', ['id', 'name'])
-        ->withMany('comments', ['id', 'body'])
+        ->with('comments', ['id', 'body'])    // Auto-detects HasMany!
         ->where('published', true)
         ->latest()
         ->paginate(20)
@@ -1321,9 +1386,9 @@ $articles = Article::optimized()
 $articles = Article::optimized()
     ->with('author')
     ->with('category')
-    ->withMany('comments')
-    ->withManyToMany('tags')
-    ->withMany('images')
+    ->with('comments')    // Auto-detects HasMany!
+    ->with('tags')        // Auto-detects BelongsToMany!
+    ->with('images')      // Auto-detects HasMany!
     ->withNested('author.profile.company')
     ->paginate(50);
 // Execution: ~80-120ms (still much faster than traditional!)
@@ -1447,7 +1512,7 @@ Article::optimized()
     ->search('laravel', ['title', 'content'])
     ->with('author')
     ->with('category')
-    ->withMany('comments')
+    ->with('comments')    // Auto-detects HasMany!
     ->get();
 ```
 - Queries: **1 query** (everything in one!)
@@ -1550,7 +1615,7 @@ public function adminSearch(Request $request)
         ->searchRelation('category', $request->input('category'), ['name'])
         ->with('author')
         ->with('category')
-        ->withMany('comments')
+        ->with('comments')    // Auto-detects HasMany!
         ->where('published', $request->input('published', true))
         ->latest()
         ->paginate(50);
