@@ -11,7 +11,13 @@
         "json-aggregation",
         "performance",
         "n+1-problem",
-        "database-optimization"
+        "database-optimization",
+        "search",
+        "fast-search",
+        "full-text-search",
+        "query-builder",
+        "optimization",
+        "performance-monitoring"
     ],
     "authors": [
         {
