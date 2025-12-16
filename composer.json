@@ -10,7 +10,7 @@
         "query-optimization",
         "json-aggregation",
         "performance",
-        "n+1-problem",
+        "n1-problem",
         "database-optimization",
         "search",
         "fast-search",
