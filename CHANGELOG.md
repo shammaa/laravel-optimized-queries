@@ -7,14 +7,21 @@ All notable changes to this project will be documented in this file.
 ### Added
 - `select()` method to specify which columns to retrieve from the base model
 - `orderByDesc()` helper method as a shortcut for `orderBy($column, 'desc')`
+- `whereHas()` method for filtering by relation existence
 - Support for `Closure` in `where()` method for complex nested conditions
 
 ### Fixed
 - Removed hardcoded version from `composer.json` to rely on git tags
+- Fixed duplicate where conditions when using Closure in where()
+- Fixed bindings issue when using Closure by properly cloning baseQuery
+- Fixed nested relation handling to avoid calling full path as method name
+- Fixed SQL syntax error in nested relation aliases (replaced dots with underscores)
 
 ### Improved
 - Better compatibility with standard Laravel Query Builder syntax
 - Enhanced flexibility for complex queries with nested where conditions
+- Improved nested relation detection and handling
+- Query builder now properly clones baseQuery to prevent side effects
 
 ## [1.0.0] - 2025-12-16
 
