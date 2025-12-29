@@ -33,20 +33,29 @@ class RelationBuilder
     public function buildRelationJson(array $relationConfig): ?string
     {
         $relationName = $relationConfig['name'];
+        $type = $relationConfig['type'] ?? 'relation';
+        $columns = $relationConfig['columns'] ?? ['*'];
+        $callback = $relationConfig['callback'] ?? null;
+
+        // Handle nested relations separately (they contain dots)
+        if ($type === 'nested' || str_contains($relationName, '.')) {
+            return $this->buildNestedRelationJson($relationName, $columns, $callback);
+        }
+
+        // For non-nested relations, get the relation instance
+        if (!method_exists($this->model, $relationName)) {
+            return null;
+        }
+
         $relation = $this->model->{$relationName}();
 
         if (!$relation instanceof Relation) {
             return null;
         }
 
-        $type = $relationConfig['type'] ?? 'relation';
-        $columns = $relationConfig['columns'] ?? ['*'];
-        $callback = $relationConfig['callback'] ?? null;
-
         return match ($type) {
             'relation' => $this->buildSingleRelationJson($relation, $relationName, $columns, $callback),
             'collection' => $this->buildCollectionRelationJson($relation, $relationName, $columns, $callback),
-            'nested' => $this->buildNestedRelationJson($relationName, $columns, $callback),
             'many_to_many' => $this->buildManyToManyJson($relation, $relationName, $columns, $callback),
             'polymorphic' => $this->buildPolymorphicJson($relation, $relationName, $columns, $callback),
             default => null,
