@@ -16,6 +16,7 @@ class RelationBuilder
     protected Builder $baseQuery;
     protected string $driver;
     protected string $jsonFunction;
+    protected bool $supportsJsonArrayAgg;
 
     public function __construct(Model $model, Builder $baseQuery)
     {
@@ -23,6 +24,7 @@ class RelationBuilder
         $this->baseQuery = $baseQuery;
         $this->driver = $this->detectDriver();
         $this->jsonFunction = $this->getJsonFunction();
+        $this->supportsJsonArrayAgg = $this->checkJsonArrayAggSupport();
     }
 
     /**
@@ -200,7 +202,15 @@ class RelationBuilder
 
         $jsonSql = $this->jsonFunction . '(' . implode(', ', $jsonPairs) . ')';
 
-        return "(SELECT JSON_ARRAYAGG({$jsonSql}) FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey}{$whereClause}) AS {$relationName}";
+        // Use JSON_ARRAYAGG if supported, otherwise fallback to GROUP_CONCAT for MariaDB 10.4
+        if ($this->supportsJsonArrayAgg) {
+            $arrayAgg = "JSON_ARRAYAGG({$jsonSql})";
+        } else {
+            // Fallback for MariaDB 10.4 and older MySQL versions
+            $arrayAgg = "CONCAT('[', COALESCE(GROUP_CONCAT({$jsonSql} SEPARATOR ','), ''), ']')";
+        }
+
+        return "(SELECT {$arrayAgg} FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey}{$whereClause}) AS {$relationName}";
     }
 
     /**
@@ -273,7 +283,14 @@ class RelationBuilder
 
         $jsonSql = $this->jsonFunction . '(' . implode(', ', $jsonPairs) . ')';
 
-        return "(SELECT JSON_ARRAYAGG({$jsonSql}) FROM {$relatedTable} INNER JOIN {$pivotTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey} WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}) AS {$relationName}";
+        // Use JSON_ARRAYAGG if supported, otherwise fallback to GROUP_CONCAT
+        if ($this->supportsJsonArrayAgg) {
+            $arrayAgg = "JSON_ARRAYAGG({$jsonSql})";
+        } else {
+            $arrayAgg = "CONCAT('[', COALESCE(GROUP_CONCAT({$jsonSql} SEPARATOR ','), ''), ']')";
+        }
+
+        return "(SELECT {$arrayAgg} FROM {$relatedTable} INNER JOIN {$pivotTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey} WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}) AS {$relationName}";
     }
 
     /**
@@ -453,6 +470,44 @@ class RelationBuilder
             'sqlite' => 'JSON_OBJECT',
             default => 'JSON_OBJECT',
         };
+    }
+
+    /**
+     * Check if database supports JSON_ARRAYAGG function.
+     *
+     * @return bool
+     */
+    protected function checkJsonArrayAggSupport(): bool
+    {
+        if ($this->driver !== 'mysql') {
+            return false;
+        }
+
+        try {
+            $versionResult = DB::selectOne('SELECT VERSION() as version');
+            $version = $versionResult->version ?? '';
+
+            // Check if it's MariaDB
+            if (str_contains($version, 'MariaDB')) {
+                // Extract version number (e.g., "10.4.32-MariaDB" -> "10.4")
+                if (preg_match('/(\d+\.\d+)/', $version, $matches)) {
+                    $versionNumber = floatval($matches[1]);
+                    // JSON_ARRAYAGG available in MariaDB 10.5+
+                    return $versionNumber >= 10.5;
+                }
+                return false;
+            }
+
+            // For MySQL, JSON_ARRAYAGG available in 5.7.22+
+            if (preg_match('/^(\d+\.\d+\.\d+)/', $version, $matches)) {
+                return version_compare($matches[1], '5.7.22', '>=');
+            }
+
+            return true; // Assume support for unknown versions
+        } catch (\Exception $e) {
+            // If we can't determine version, assume no support
+            return false;
+        }
     }
 }
 
