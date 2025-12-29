@@ -440,6 +440,23 @@ class OptimizedQueryBuilder
     }
 
     /**
+     * Add whereHas clause for filtering by relation existence.
+     *
+     * @param string $relation
+     * @param \Closure|null $callback
+     * @param string $operator
+     * @param int $count
+     * @return $this
+     */
+    public function whereHas(string $relation, ?\Closure $callback = null, string $operator = '>=', int $count = 1): self
+    {
+        // Delegate to base query for whereHas
+        $this->baseQuery->whereHas($relation, $callback, $operator, $count);
+        
+        return $this;
+    }
+
+    /**
      * Search in multiple fields (fast LIKE search).
      *
      * @param string $term Search term
