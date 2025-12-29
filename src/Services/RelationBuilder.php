@@ -211,12 +211,15 @@ class RelationBuilder
         
         $relation = $this->model->{$firstRelation}();
         
+        // Replace dots with underscores for valid SQL alias
+        $aliasName = str_replace('.', '_', $relationPath);
+        
         // For now, we only support the first level of nesting
         // Full nested support would require recursive SQL building which is complex
         // Users should use Laravel's with() for deep nesting
         return $this->buildSingleRelationJson(
             $relation,
-            $relationPath,  // Use full path as alias
+            $aliasName,  // Use underscore version as alias
             $columns,
             $callback
         );
