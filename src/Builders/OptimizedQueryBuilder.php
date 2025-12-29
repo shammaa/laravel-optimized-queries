@@ -41,7 +41,7 @@ class OptimizedQueryBuilder
     protected bool $enablePerformanceMonitoring = true;
     protected ?PerformanceMonitor $performanceMonitor = null;
     protected array $selectedColumns = [];
-    protected bool $wheresAppliedToBase = false;
+    protected ?Builder $finalQuery = null;
 
     public function __construct(Builder $baseQuery)
     {
@@ -834,27 +834,28 @@ class OptimizedQueryBuilder
         $orderBys = $this->buildOrderBys();
 
         // Check if base query has conditions - if so, use it as subquery
-        $baseQuerySql = $this->baseQuery->toSql();
         $hasBaseConditions = !empty($this->baseQuery->getQuery()->wheres);
 
         // If we have base conditions (from Closure or other complex queries), use base query
         if ($hasBaseConditions) {
-            // Apply our custom wheres to base query (only once)
-            if (!$this->wheresAppliedToBase) {
-                foreach ($this->wheres as $where) {
-                    $this->baseQuery->where($where['column'], $where['operator'], $where['value']);
-                }
-                
-                // Apply order bys
-                foreach ($this->orderBys as $orderBy) {
-                    $this->baseQuery->orderBy($orderBy['column'], $orderBy['direction']);
-                }
-                
-                $this->wheresAppliedToBase = true;
+            // Clone base query to avoid modifying the original
+            $clonedQuery = clone $this->baseQuery;
+            
+            // Apply our custom wheres to cloned query
+            foreach ($this->wheres as $where) {
+                $clonedQuery->where($where['column'], $where['operator'], $where['value']);
             }
             
-            // Use base query as subquery with relations
-            $baseQuerySql = $this->baseQuery->toSql();
+            // Apply order bys
+            foreach ($this->orderBys as $orderBy) {
+                $clonedQuery->orderBy($orderBy['column'], $orderBy['direction']);
+            }
+            
+            // Store final query for bindings
+            $this->finalQuery = $clonedQuery;
+            
+            // Use cloned query as subquery with relations
+            $baseQuerySql = $clonedQuery->toSql();
             $sql = "SELECT " . implode(', ', $selects) . " FROM ({$baseQuerySql}) AS {$baseTable}";
         } else {
             // Build final SQL normally
@@ -1136,11 +1137,13 @@ class OptimizedQueryBuilder
             Log::info('Optimized Query', ['sql' => $sql, 'bindings' => $this->getBindings()]);
         }
 
-        // Merge bindings from base query and custom wheres
-        $bindings = array_merge(
-            $this->baseQuery->getBindings(),
-            $this->getCustomBindings()
-        );
+        // Merge bindings from final query (if exists) or base query and custom wheres
+        $bindings = $this->finalQuery 
+            ? $this->finalQuery->getBindings()
+            : array_merge(
+                $this->baseQuery->getBindings(),
+                $this->getCustomBindings()
+            );
 
         $results = DB::select($sql, $bindings);
         
