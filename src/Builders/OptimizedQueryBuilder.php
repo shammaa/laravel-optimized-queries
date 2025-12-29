@@ -532,6 +532,17 @@ class OptimizedQueryBuilder
     }
 
     /**
+     * Add orderBy clause in descending order.
+     *
+     * @param string $column
+     * @return $this
+     */
+    public function orderByDesc(string $column): self
+    {
+        return $this->orderBy($column, 'desc');
+    }
+
+    /**
      * Set limit.
      *
      * @param int $limit
