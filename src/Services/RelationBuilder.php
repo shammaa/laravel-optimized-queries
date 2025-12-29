@@ -6,6 +6,7 @@ namespace Shammaa\LaravelOptimizedQueries\Services;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Facades\DB;
 
@@ -142,7 +143,19 @@ class RelationBuilder
 
         $jsonSql = $this->jsonFunction . '(' . implode(', ', $jsonPairs) . ')';
 
-        return "(SELECT {$jsonSql} FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey}{$whereClause} LIMIT 1) AS {$relationName}";
+        // Check if it's a BelongsTo relation (foreign key is in base table)
+        // or HasOne (foreign key is in related table)
+        if ($relation instanceof \Illuminate\Database\Eloquent\Relations\BelongsTo) {
+            // BelongsTo: foreign key in base table, owner key in related table
+            // Example: articles.category_id = taxonomies.id
+            $foreignKeyName = $relation->getForeignKeyName(); // category_id
+            $ownerKeyName = $relation->getOwnerKeyName(); // id
+            return "(SELECT {$jsonSql} FROM {$relatedTable} WHERE {$relatedTable}.{$ownerKeyName} = {$baseTable}.{$foreignKeyName}{$whereClause} LIMIT 1) AS {$relationName}";
+        } else {
+            // HasOne: foreign key in related table, local key in base table
+            // Example: related_table.base_id = base_table.id
+            return "(SELECT {$jsonSql} FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$localKey}{$whereClause} LIMIT 1) AS {$relationName}";
+        }
     }
 
     /**
