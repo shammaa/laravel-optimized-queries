@@ -836,11 +836,23 @@ class OptimizedQueryBuilder
         $baseQuerySql = $this->baseQuery->toSql();
         $hasBaseConditions = !empty($this->baseQuery->getQuery()->wheres);
 
-        if ($hasBaseConditions && count($this->wheres) === 0 && empty($this->orderBys)) {
-            // Use base query as subquery
+        // If we have base conditions (from Closure or other complex queries), use base query
+        if ($hasBaseConditions) {
+            // Apply our custom wheres to base query
+            foreach ($this->wheres as $where) {
+                $this->baseQuery->where($where['column'], $where['operator'], $where['value']);
+            }
+            
+            // Apply order bys
+            foreach ($this->orderBys as $orderBy) {
+                $this->baseQuery->orderBy($orderBy['column'], $orderBy['direction']);
+            }
+            
+            // Use base query as subquery with relations
+            $baseQuerySql = $this->baseQuery->toSql();
             $sql = "SELECT " . implode(', ', $selects) . " FROM ({$baseQuerySql}) AS {$baseTable}";
         } else {
-            // Build final SQL
+            // Build final SQL normally
             $sql = "SELECT " . implode(', ', $selects) . " FROM {$baseTable}";
             
             if (!empty($wheres)) {
