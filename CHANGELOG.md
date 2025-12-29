@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.2] - 2025-12-29
+
+### Added
+- `select()` method to specify which columns to retrieve from the base model
+- `orderByDesc()` helper method as a shortcut for `orderBy($column, 'desc')`
+- Support for `Closure` in `where()` method for complex nested conditions
+
+### Fixed
+- Removed hardcoded version from `composer.json` to rely on git tags
+
+### Improved
+- Better compatibility with standard Laravel Query Builder syntax
+- Enhanced flexibility for complex queries with nested where conditions
+
 ## [1.0.0] - 2025-12-16
 
 ### Added
