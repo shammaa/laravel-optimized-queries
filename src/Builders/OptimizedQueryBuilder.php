@@ -40,6 +40,7 @@ class OptimizedQueryBuilder
     protected ?string $cacheKey = null;
     protected bool $enablePerformanceMonitoring = true;
     protected ?PerformanceMonitor $performanceMonitor = null;
+    protected array $selectedColumns = [];
 
     public function __construct(Builder $baseQuery)
     {
@@ -329,6 +330,19 @@ class OptimizedQueryBuilder
             'name' => $relation,
             'callback' => $callback,
         ];
+
+        return $this;
+    }
+
+    /**
+     * Specify columns to select from the base model.
+     *
+     * @param array|string $columns
+     * @return $this
+     */
+    public function select(array|string $columns): self
+    {
+        $this->selectedColumns = is_string($columns) ? [$columns] : $columns;
 
         return $this;
     }
@@ -839,6 +853,11 @@ class OptimizedQueryBuilder
      */
     protected function getBaseColumns(): array
     {
+        // If columns were explicitly selected via select(), use those
+        if (!empty($this->selectedColumns)) {
+            return $this->selectedColumns;
+        }
+
         $fillable = $this->model->getFillable();
         
         if (empty($fillable)) {
