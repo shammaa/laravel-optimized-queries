@@ -350,13 +350,19 @@ class OptimizedQueryBuilder
     /**
      * Add where clause.
      *
-     * @param string|array $column
+     * @param string|array|\Closure $column
      * @param mixed $operator
      * @param mixed $value
      * @return $this
      */
-    public function where(string|array $column, mixed $operator = null, mixed $value = null): self
+    public function where(string|array|\Closure $column, mixed $operator = null, mixed $value = null): self
     {
+        // If closure is passed, delegate to base query
+        if ($column instanceof \Closure) {
+            $this->baseQuery->where($column);
+            return $this;
+        }
+
         if (is_array($column)) {
             foreach ($column as $key => $val) {
                 $this->wheres[] = ['column' => $key, 'operator' => '=', 'value' => $val];
