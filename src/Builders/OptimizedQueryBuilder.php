@@ -41,6 +41,7 @@ class OptimizedQueryBuilder
     protected bool $enablePerformanceMonitoring = true;
     protected ?PerformanceMonitor $performanceMonitor = null;
     protected array $selectedColumns = [];
+    protected bool $wheresAppliedToBase = false;
 
     public function __construct(Builder $baseQuery)
     {
@@ -838,14 +839,18 @@ class OptimizedQueryBuilder
 
         // If we have base conditions (from Closure or other complex queries), use base query
         if ($hasBaseConditions) {
-            // Apply our custom wheres to base query
-            foreach ($this->wheres as $where) {
-                $this->baseQuery->where($where['column'], $where['operator'], $where['value']);
-            }
-            
-            // Apply order bys
-            foreach ($this->orderBys as $orderBy) {
-                $this->baseQuery->orderBy($orderBy['column'], $orderBy['direction']);
+            // Apply our custom wheres to base query (only once)
+            if (!$this->wheresAppliedToBase) {
+                foreach ($this->wheres as $where) {
+                    $this->baseQuery->where($where['column'], $where['operator'], $where['value']);
+                }
+                
+                // Apply order bys
+                foreach ($this->orderBys as $orderBy) {
+                    $this->baseQuery->orderBy($orderBy['column'], $orderBy['direction']);
+                }
+                
+                $this->wheresAppliedToBase = true;
             }
             
             // Use base query as subquery with relations
