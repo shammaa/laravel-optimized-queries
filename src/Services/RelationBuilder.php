@@ -191,16 +191,23 @@ class RelationBuilder
      */
     protected function buildNestedRelationJson(string $relationPath, array $columns, ?\Closure $callback): string
     {
-        // This is complex - requires recursive building
-        // For now, return a placeholder that can be enhanced
+        // Split the path into parts (e.g., 'category.parent' -> ['category', 'parent'])
         $parts = explode('.', $relationPath);
         $firstRelation = $parts[0];
         
-        // Build for first level, then recursively for nested
-        // This is a simplified version - full implementation would be more complex
+        // Check if first relation exists
+        if (!method_exists($this->model, $firstRelation)) {
+            throw new \BadMethodCallException("Relation {$firstRelation} does not exist on model " . get_class($this->model));
+        }
+        
+        $relation = $this->model->{$firstRelation}();
+        
+        // For now, we only support the first level of nesting
+        // Full nested support would require recursive SQL building which is complex
+        // Users should use Laravel's with() for deep nesting
         return $this->buildSingleRelationJson(
-            $this->model->{$firstRelation}(),
-            $relationPath,
+            $relation,
+            $relationPath,  // Use full path as alias
             $columns,
             $callback
         );
