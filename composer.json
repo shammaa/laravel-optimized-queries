@@ -3,7 +3,6 @@
     "description": "Advanced Laravel query optimizer - Reduce multiple Eloquent queries to a single optimized SQL statement with JSON aggregation. Supports nested relations, callbacks, belongsToMany, polymorphic relations, and caching.",
     "type": "library",
     "license": "MIT",
-    "version": "1.0.0",
     "keywords": [
         "laravel",
         "eloquent",
@@ -57,4 +56,3 @@
     "minimum-stability": "stable",
     "prefer-stable": true
 }
-
