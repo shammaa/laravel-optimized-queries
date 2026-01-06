@@ -615,46 +615,49 @@ $articles = Article::optimized()
     ->paginate(20);
 ```
 
-### Caching
+### ⚡ Powerful Caching System (NEW!)
+
+The library includes a multi-layered, ultra-fast caching system:
+
+1. **Request Caching (Static Memory)**: Automatically stores results in memory during a single request. If you call the same query multiple times in the same page execution, it returns instantly with **ZERO** overhead.
+2. **Tag-based Caching**: Automatically tags results with the model's table name.
+3. **Smart Invalidation**: Automatically clears the cache for a model when any record is `saved`, `deleted`, or `restored`.
 
 ```php
-// Enable caching (default TTL from config)
+// 1. Basic caching (auto-tagged by table name)
 ->cache()
 
-// Custom TTL (seconds)
-->cache(7200) // 2 hours
+// 2. Custom TTL and Tags
+->cache(3600, ['custom_tag'])
 
-// Custom cache key
-->cacheKey('partners_active_list')
+// 3. Clear cache manually for a model
+$article->clearOptimizedCache();
 
-// Disable caching
+// 4. Force without cache
 ->withoutCache()
 ```
 
-### Execution Methods
+> **Note:** Tag-based caching requires a cache driver that supports tags (like `redis` or `memcached`). If your driver doesn't support tags, it will fall back to standard caching.
+
+### 🔄 Fluent Output Formats (Flexible API)
+
+You can choose how you want your data returned using these clean methods:
 
 ```php
-// Get all results (as arrays by default)
-->get()
+// 1. Array (Default - Fastest)
+$articles = Article::optimized()->asArray()->get();
+// Use: $articles[0]['title']
 
-// Get as Eloquent models
-->get('eloquent')
+// 2. Object (Clean & Fast - Recommended for simple views)
+$articles = Article::optimized()->asObject()->get();
+// Use: $article->title (Uses stdClass, very lightweight)
 
-// Get first result
-->first()
-
-// Paginate
-->paginate(15)
-
-// Get SQL
-->toSql()
-
-// Get bindings
-->getBindings()
-
-// Debug (logs SQL + execution time)
-->debug()
+// 3. Eloquent (Full Laravel Model - Supports Accessors)
+$articles = Article::optimized()->asEloquent()->get();
+// Use: $article->title (Supports $article->formatted_date, etc.)
 ```
+
+You can change the global default in `config/optimized-queries.php` by setting `default_format`.
 
 ---
 

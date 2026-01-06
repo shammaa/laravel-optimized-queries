@@ -14,6 +14,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Default Output Format
+    |--------------------------------------------------------------------------
+    |
+    | This option defines the default output format for the optimized results.
+    | Options: 'array', 'eloquent', 'object'
+    |
+    | 'eloquent': Returns a collection of Eloquent models (standard Laravel behavior).
+    | 'array': Returns a collection of associative arrays (fastest).
+    | 'object': Returns a collection of stdClass objects.
+    |
+    */
+    'default_format' => 'array',
+
+    /*
+    |--------------------------------------------------------------------------
     | Enable Query Caching
     |--------------------------------------------------------------------------
     |

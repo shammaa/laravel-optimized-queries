@@ -42,6 +42,9 @@ class OptimizedQueryBuilder
     protected ?PerformanceMonitor $performanceMonitor = null;
     protected array $selectedColumns = [];
     protected ?Builder $finalQuery = null;
+    protected ?string $requestedFormat = null;
+    protected array $cacheTags = [];
+    protected static array $requestCache = [];
 
     public function __construct(Builder $baseQuery)
     {
@@ -593,11 +596,24 @@ class OptimizedQueryBuilder
      * @param int|null $ttl
      * @return $this
      */
-    public function cache(?int $ttl = null): self
+    public function cache(?int $ttl = null, array $tags = []): self
     {
         $this->enableCache = true;
         $this->cacheTtl = $ttl ?? config('optimized-queries.default_cache_ttl', 3600);
+        $this->cacheTags = !empty($tags) ? $tags : [$this->model->getTable()];
 
+        return $this;
+    }
+
+    /**
+     * Set cache tags manually.
+     *
+     * @param array $tags
+     * @return $this
+     */
+    public function tags(array $tags): self
+    {
+        $this->cacheTags = $tags;
         return $this;
     }
 
@@ -614,6 +630,39 @@ class OptimizedQueryBuilder
     }
 
     /**
+     * Set the output format to object.
+     *
+     * @return $this
+     */
+    public function asObject(): self
+    {
+        $this->requestedFormat = 'object';
+        return $this;
+    }
+
+    /**
+     * Set the output format to eloquent models.
+     *
+     * @return $this
+     */
+    public function asEloquent(): self
+    {
+        $this->requestedFormat = 'eloquent';
+        return $this;
+    }
+
+    /**
+     * Set the output format to array.
+     *
+     * @return $this
+     */
+    public function asArray(): self
+    {
+        $this->requestedFormat = 'array';
+        return $this;
+    }
+
+    /**
      * Set custom cache key.
      *
      * @param string $key
@@ -626,24 +675,36 @@ class OptimizedQueryBuilder
         return $this;
     }
 
-    /**
+     /**
      * Execute query and get results.
      *
-     * @param string $format 'array' or 'eloquent'
+     * @param string|null $format 'array', 'eloquent', or 'object'
      * @return Collection
      */
-    public function get(string $format = 'array'): Collection
+    public function get(?string $format = null): Collection
     {
-        // Check cache
+        $format = $format ?? $this->requestedFormat ?? config('optimized-queries.default_format', 'array');
+        $cacheKey = $this->getCacheKey();
+
+        // 1. Request Cache (Memory Cache - Super Fast)
+        if (isset(self::$requestCache[$cacheKey])) {
+            return $this->formatResults(self::$requestCache[$cacheKey], $format);
+        }
+
+        // 2. External Cache (Redis/Memcached/File)
         if ($this->enableCache) {
-            $cacheKey = $this->getCacheKey();
-            $cached = Cache::get($cacheKey);
+            $cache = Cache::supportsTags() && !empty($this->cacheTags)
+                ? Cache::tags($this->cacheTags)
+                : Cache::store();
+
+            $cached = $cache->get($cacheKey);
             if ($cached !== null) {
+                self::$requestCache[$cacheKey] = $cached;
                 return $this->formatResults($cached, $format);
             }
         }
 
-        // Build and execute query
+        // 3. Database Execution
         $sql = $this->buildQuery();
         $results = $this->executeQuery($sql);
 
@@ -652,10 +713,16 @@ class OptimizedQueryBuilder
             $this->performanceMonitor->stop();
         }
 
-        // Cache results
+        // Store in caches
         if ($this->enableCache && $this->cacheTtl) {
-            Cache::put($cacheKey, $results, $this->cacheTtl);
+            $cache = Cache::supportsTags() && !empty($this->cacheTags)
+                ? Cache::tags($this->cacheTags)
+                : Cache::store();
+
+            $cache->put($cacheKey, $results, $this->cacheTtl);
         }
+
+        self::$requestCache[$cacheKey] = $results;
 
         return $this->formatResults($results, $format);
     }
@@ -702,13 +769,13 @@ class OptimizedQueryBuilder
         return PerformanceMonitor::compare($before, $after);
     }
 
-    /**
+     /**
      * Get first result.
      *
-     * @param string $format
-     * @return array|Model|null
+     * @param string|null $format
+     * @return Model|array|object|null
      */
-    public function first(string $format = 'array'): array|Model|null
+    public function first(?string $format = null): object|array|null
     {
         return $this->limit(1)->get($format)->first();
     }
@@ -1225,19 +1292,33 @@ class OptimizedQueryBuilder
     protected function formatResults(array $results, string $format): Collection
     {
         $formatted = [];
+        $asArray = ($format === 'array');
 
         foreach ($results as $result) {
             // Decode JSON columns
             foreach ($this->relations as $relation) {
                 $relationName = $relation['name'];
-                if (isset($result[$relationName])) {
-                    $decoded = json_decode($result[$relationName], true);
-                    $result[$relationName] = $decoded ?? ($relation['type'] === 'collection' ? [] : null);
+                
+                // For nested relations with dots, they are aliased with underscores
+                $aliasName = str_replace('.', '_', $relationName);
+                $keyToUse = isset($result[$aliasName]) ? $aliasName : (isset($result[$relationName]) ? $relationName : null);
+
+                if ($keyToUse) {
+                    // If format is eloquent or object, decode as objects for -> access
+                    $decoded = json_decode((string) $result[$keyToUse], $asArray);
+                    $result[$keyToUse] = $decoded ?? ($relation['type'] === 'collection' ? [] : null);
+                    
+                    // If it was an aliased nested relation, also set it on the original name if requested
+                    if ($keyToUse !== $relationName) {
+                        $result[$relationName] = $result[$keyToUse];
+                    }
                 }
             }
 
             if ($format === 'eloquent') {
                 $formatted[] = $this->model->newInstance($result);
+            } elseif ($format === 'object') {
+                $formatted[] = (object) $result;
             } else {
                 $formatted[] = $result;
             }
