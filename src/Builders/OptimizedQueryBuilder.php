@@ -663,6 +663,17 @@ class OptimizedQueryBuilder
     }
 
     /**
+     * Clear the static request cache.
+     * Useful for long-running processes like Laravel Octane.
+     *
+     * @return void
+     */
+    public static function clearRequestCache(): void
+    {
+        self::$requestCache = [];
+    }
+
+    /**
      * Set custom cache key.
      *
      * @param string $key
@@ -693,7 +704,8 @@ class OptimizedQueryBuilder
 
         // 2. External Cache (Redis/Memcached/File)
         if ($this->enableCache) {
-            $cache = Cache::supportsTags() && !empty($this->cacheTags)
+            $store = Cache::getStore();
+            $cache = ($store instanceof \Illuminate\Cache\TaggableStore && !empty($this->cacheTags))
                 ? Cache::tags($this->cacheTags)
                 : Cache::store();
 
@@ -715,7 +727,8 @@ class OptimizedQueryBuilder
 
         // Store in caches
         if ($this->enableCache && $this->cacheTtl) {
-            $cache = Cache::supportsTags() && !empty($this->cacheTags)
+            $store = Cache::getStore();
+            $cache = ($store instanceof \Illuminate\Cache\TaggableStore && !empty($this->cacheTags))
                 ? Cache::tags($this->cacheTags)
                 : Cache::store();
 
@@ -1295,28 +1308,35 @@ class OptimizedQueryBuilder
         $asArray = ($format === 'array');
 
         foreach ($results as $result) {
+            $relationResults = [];
+
             // Decode JSON columns
             foreach ($this->relations as $relation) {
                 $relationName = $relation['name'];
-                
-                // For nested relations with dots, they are aliased with underscores
                 $aliasName = str_replace('.', '_', $relationName);
                 $keyToUse = isset($result[$aliasName]) ? $aliasName : (isset($result[$relationName]) ? $relationName : null);
 
                 if ($keyToUse) {
-                    // If format is eloquent or object, decode as objects for -> access
                     $decoded = json_decode((string) $result[$keyToUse], $asArray);
-                    $result[$keyToUse] = $decoded ?? ($relation['type'] === 'collection' ? [] : null);
+                    $decoded = $decoded ?? ($relation['type'] === 'collection' ? [] : null);
                     
-                    // If it was an aliased nested relation, also set it on the original name if requested
-                    if ($keyToUse !== $relationName) {
-                        $result[$relationName] = $result[$keyToUse];
+                    if ($format === 'eloquent') {
+                        $relationResults[$relationName] = $this->hydrateRelation($relation, $decoded);
+                        unset($result[$keyToUse]); // Remove from attributes
+                    } else {
+                        $result[$relationName] = $decoded;
+                        if ($keyToUse !== $relationName) unset($result[$keyToUse]);
                     }
                 }
             }
 
             if ($format === 'eloquent') {
-                $formatted[] = $this->model->newInstance($result);
+                $model = $this->model->newInstance([], true);
+                $model->setRawAttributes($result);
+                foreach ($relationResults as $name => $val) {
+                    $model->setRelation($name, $val);
+                }
+                $formatted[] = $model;
             } elseif ($format === 'object') {
                 $formatted[] = (object) $result;
             } else {
@@ -1325,6 +1345,27 @@ class OptimizedQueryBuilder
         }
 
         return collect($formatted);
+    }
+
+    /**
+     * Hydrate a decoded relation back into Eloquent models.
+     *
+     * @param array $relationConfig
+     * @param mixed $decoded
+     * @return mixed
+     */
+    protected function hydrateRelation(array $relationConfig, mixed $decoded): mixed
+    {
+        if (empty($decoded)) return $relationConfig['type'] === 'collection' ? collect() : null;
+
+        $relationName = explode('.', $relationConfig['name'])[0];
+        $relatedModel = $this->model->$relationName()->getRelated();
+
+        if ($relationConfig['type'] === 'collection' || $relationConfig['type'] === 'many_to_many') {
+            return collect($decoded)->map(fn($item) => $relatedModel->newInstance((array)$item, true));
+        }
+
+        return $relatedModel->newInstance((array)$decoded, true);
     }
 
     /**
