@@ -1359,13 +1359,22 @@ class OptimizedQueryBuilder
         if (empty($decoded)) return $relationConfig['type'] === 'collection' ? collect() : null;
 
         $relationName = explode('.', $relationConfig['name'])[0];
-        $relatedModel = $this->model->$relationName()->getRelated();
+        $relation = $this->model->$relationName();
+        $relatedModelClass = get_class($relation->getRelated());
 
         if ($relationConfig['type'] === 'collection' || $relationConfig['type'] === 'many_to_many') {
-            return collect($decoded)->map(fn($item) => $relatedModel->newInstance((array)$item, true));
+            return collect($decoded)->map(function ($item) use ($relatedModelClass) {
+                $model = new $relatedModelClass();
+                $model->setRawAttributes((array) $item, true);
+                $model->exists = true;
+                return $model;
+            });
         }
 
-        return $relatedModel->newInstance((array)$decoded, true);
+        $model = new $relatedModelClass();
+        $model->setRawAttributes((array) $decoded, true);
+        $model->exists = true;
+        return $model;
     }
 
     /**
