@@ -15,7 +15,11 @@ trait HasOptimizedQueries
     {
         static::saved(fn ($model) => $model->clearOptimizedCache());
         static::deleted(fn ($model) => $model->clearOptimizedCache());
-        static::restored(fn ($model) => $model->clearOptimizedCache());
+        
+        // Only register restored event if the model uses SoftDeletes
+        if (in_array(\Illuminate\Database\Eloquent\SoftDeletes::class, class_uses_recursive(static::class))) {
+            static::restored(fn ($model) => $model->clearOptimizedCache());
+        }
     }
 
     /**
