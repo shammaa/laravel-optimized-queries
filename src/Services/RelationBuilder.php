@@ -331,6 +331,7 @@ class RelationBuilder
 
     /**
      * Resolve columns for a model.
+     * Excludes translatable columns if the model uses HasTranslations trait.
      *
      * @param Model $model
      * @param array $columns
@@ -346,9 +347,61 @@ class RelationBuilder
                 $columns[] = $model->getCreatedAtColumn();
                 $columns[] = $model->getUpdatedAtColumn();
             }
+
+            // ✅ Check if related model uses translations and exclude translatable columns
+            $translatableFields = $this->getTranslatableFieldsFromModel($model);
+            if (!empty($translatableFields)) {
+                $columns = array_filter($columns, function ($col) use ($translatableFields) {
+                    return !in_array($col, $translatableFields);
+                });
+            }
+        } else {
+            // ✅ Even for explicit columns, filter out translatable ones
+            $translatableFields = $this->getTranslatableFieldsFromModel($model);
+            if (!empty($translatableFields)) {
+                $columns = array_filter($columns, function ($col) use ($translatableFields) {
+                    return !in_array($col, $translatableFields);
+                });
+            }
         }
 
-        return array_unique($columns);
+        return array_unique(array_values($columns));
+    }
+
+    /**
+     * Get translatable fields from a model if it uses HasTranslations.
+     *
+     * @param Model $model
+     * @return array
+     */
+    protected function getTranslatableFieldsFromModel(Model $model): array
+    {
+        // Check if model uses HasTranslations trait
+        $traits = class_uses_recursive($model);
+        $hasTranslations = false;
+        
+        foreach ($traits as $trait) {
+            if (str_contains($trait, 'HasTranslations') || str_contains($trait, 'Translatable')) {
+                $hasTranslations = true;
+                break;
+            }
+        }
+
+        if (!$hasTranslations && !method_exists($model, 'translations')) {
+            return [];
+        }
+
+        // Get translatable fields
+        if (property_exists($model, 'translatable')) {
+            return $model->translatable ?? [];
+        }
+
+        if (method_exists($model, 'getTranslatableAttributes')) {
+            return $model->getTranslatableAttributes();
+        }
+
+        // Common translatable fields as fallback
+        return ['title', 'name', 'description', 'content', 'slug', 'short_description', 'meta_title', 'meta_description', 'meta_keywords'];
     }
 
     /**

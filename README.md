@@ -8,6 +8,9 @@
 
 Transform **5-15 queries** into **1 optimized query** - reducing execution time by **80-90%** and achieving **5-10x speedup** in real-world scenarios.
 
+### 🌍 Full Translation Support
+
+**Official integration with [`shammaa/laravel-model-translations`](https://github.com/shammaa/laravel-model-translations)** - Query multilingual content with zero configuration!
 ---
 
 ## ✨ Key Features
