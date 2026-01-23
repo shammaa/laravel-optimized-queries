@@ -138,15 +138,16 @@ class RelationBuilder
         $baseTable = $this->model->getTable();
         $baseKey = $this->model->getKeyName();
 
-        // Check if related model uses translations
-        $translatableFields = $this->getTranslatableFieldsFromModel($relatedModel);
-        $hasTranslations = !empty($translatableFields);
+        // Check if related model uses translations and get metadata
+        $meta = $this->getTranslationMetadata($relatedModel);
+        $translatableFields = $meta['fields'];
+        $hasTranslations = !empty($translatableFields) && !empty($meta['table']);
         
         // Get locale
         $locale = $this->locale ?? app()->getLocale();
         
         // Build translations table name and alias
-        $translationsTable = $this->getSingular($relatedTable) . '_translations';
+        $translationsTable = $meta['table'];
         $translationsAlias = $relationName . '_trans';
         
         // Resolve columns (get all requested columns)
@@ -180,7 +181,7 @@ class RelationBuilder
         $joinClause = '';
         if ($hasTranslations) {
             $relatedKey = $relatedModel->getKeyName();
-            $foreignKeyInTranslations = $this->getSingular($relatedTable) . '_id';
+            $foreignKeyInTranslations = $meta['foreign_key'] ?? ($this->getSingular($relatedTable) . '_id');
             $joinClause = " LEFT JOIN {$translationsTable} AS {$translationsAlias} ON {$relatedTable}.{$relatedKey} = {$translationsAlias}.{$foreignKeyInTranslations} AND {$translationsAlias}.locale = '{$locale}'";
         }
 
@@ -234,15 +235,16 @@ class RelationBuilder
         $baseTable = $this->model->getTable();
         $baseKey = $this->model->getKeyName();
 
-        // Check if related model uses translations
-        $translatableFields = $this->getTranslatableFieldsFromModel($relatedModel);
-        $hasTranslations = !empty($translatableFields);
+        // Check if related model uses translations and get metadata
+        $meta = $this->getTranslationMetadata($relatedModel);
+        $translatableFields = $meta['fields'];
+        $hasTranslations = !empty($translatableFields) && !empty($meta['table']);
         
         // Get locale
         $locale = $this->locale ?? app()->getLocale();
         
         // Build translations table name and alias
-        $translationsTable = $this->getSingular($relatedTable) . '_translations';
+        $translationsTable = $meta['table'];
         $translationsAlias = $relationName . '_trans';
         
         // Resolve columns (get all requested columns)
@@ -274,7 +276,7 @@ class RelationBuilder
         $joinClause = '';
         if ($hasTranslations) {
             $relatedKey = $relatedModel->getKeyName();
-            $foreignKeyInTranslations = $this->getSingular($relatedTable) . '_id';
+            $foreignKeyInTranslations = $meta['foreign_key'] ?? ($this->getSingular($relatedTable) . '_id');
             $joinClause = " LEFT JOIN {$translationsTable} AS {$translationsAlias} ON {$relatedTable}.{$relatedKey} = {$translationsAlias}.{$foreignKeyInTranslations} AND {$translationsAlias}.locale = '{$locale}'";
         }
 
@@ -361,15 +363,16 @@ class RelationBuilder
         $relatedPivotKey = $relation->getRelatedPivotKeyName();
         $relatedKey = $relation->getRelatedKeyName();
 
-        // Check if related model uses translations
-        $translatableFields = $this->getTranslatableFieldsFromModel($relatedModel);
-        $hasTranslations = !empty($translatableFields);
+        // Check if related model uses translations and get metadata
+        $meta = $this->getTranslationMetadata($relatedModel);
+        $translatableFields = $meta['fields'];
+        $hasTranslations = !empty($translatableFields) && !empty($meta['table']);
         
         // Get locale
         $locale = $this->locale ?? app()->getLocale();
         
         // Build translations table name and alias
-        $translationsTable = $this->getSingular($relatedTable) . '_translations';
+        $translationsTable = $meta['table'];
         $translationsAlias = $relationName . '_trans';
         
         // Resolve columns (get all requested columns)
@@ -401,7 +404,7 @@ class RelationBuilder
         $translationJoinClause = '';
         if ($hasTranslations) {
             $modelKey = $relatedModel->getKeyName();
-            $foreignKeyInTranslations = $this->getSingular($relatedTable) . '_id';
+            $foreignKeyInTranslations = $meta['foreign_key'] ?? ($this->getSingular($relatedTable) . '_id');
             $translationJoinClause = " LEFT JOIN {$translationsTable} AS {$translationsAlias} ON {$relatedTable}.{$modelKey} = {$translationsAlias}.{$foreignKeyInTranslations} AND {$translationsAlias}.locale = '{$locale}'";
         }
 
@@ -461,6 +464,9 @@ class RelationBuilder
      */
     protected function resolveColumns(Model $model, array $columns): array
     {
+        $meta = $this->getTranslationMetadata($model);
+        $translatableFields = $meta['fields'];
+
         if (in_array('*', $columns)) {
             $fillable = $model->getFillable();
             $columns = array_merge([$model->getKeyName()], $fillable);
@@ -471,7 +477,6 @@ class RelationBuilder
             }
 
             // ✅ Check if related model uses translations and exclude translatable columns
-            $translatableFields = $this->getTranslatableFieldsFromModel($model);
             if (!empty($translatableFields)) {
                 $columns = array_filter($columns, function ($col) use ($translatableFields) {
                     return !in_array($col, $translatableFields);
@@ -479,7 +484,6 @@ class RelationBuilder
             }
         } else {
             // ✅ Even for explicit columns, filter out translatable ones
-            $translatableFields = $this->getTranslatableFieldsFromModel($model);
             if (!empty($translatableFields)) {
                 $columns = array_filter($columns, function ($col) use ($translatableFields) {
                     return !in_array($col, $translatableFields);
@@ -491,47 +495,73 @@ class RelationBuilder
     }
 
     /**
-     * Get translatable fields from a model if it uses our specific translation system.
-     * Checks for HasTranslations trait AND the existence of a translations() relation.
+     * Get translatable fields and metadata from a model.
      *
      * @param Model $model
-     * @return array
+     * @return array{fields: array, table: string|null, foreign_key: string|null}
      */
-    protected function getTranslatableFieldsFromModel(Model $model): array
+    protected function getTranslationMetadata(Model $model): array
     {
-        // Check if model uses common translation traits
         $traits = class_uses_recursive($model);
-        $likelyTranslatable = false;
+        $isTranslatable = false;
         
         foreach ($traits as $trait) {
             if (str_contains($trait, 'HasTranslations') || str_contains($trait, 'Translatable')) {
-                $likelyTranslatable = true;
+                $isTranslatable = true;
                 break;
             }
         }
 
-        // To avoid conflicts with JSON-based translations (like Spatie),
-        // we MUST verify the model has a translations() relation (table-based).
-        if (!$likelyTranslatable && !method_exists($model, 'translations')) {
-            return [];
+        // If not translatable by trait/property/method, return empty
+        $hasProperty = property_exists($model, 'translatable');
+        $hasMethod = method_exists($model, 'getTranslatableAttributes');
+        $hasTranslationMethod = method_exists($model, 'translations');
+
+        if (!$isTranslatable && !$hasProperty && !$hasMethod && !$hasTranslationMethod) {
+            return ['fields' => [], 'table' => null, 'foreign_key' => null];
         }
 
-        // If it looks translatable but doesn't have the translations relation, skip it
-        // This is the safety check for Spatie/other JSON translation systems
-        if (!method_exists($model, 'translations')) {
-            return [];
+        // Get translatable fields
+        $fields = [];
+        if ($hasProperty) {
+            $fields = (array) $model->translatable;
+        } elseif ($hasMethod) {
+            $fields = (array) $model->getTranslatableAttributes();
         }
 
-        // Get translatable fields from the property or method
-        if (property_exists($model, 'translatable')) {
-            return (array) $model->translatable;
+        if (empty($fields)) {
+            return ['fields' => [], 'table' => null, 'foreign_key' => null];
         }
 
-        if (method_exists($model, 'getTranslatableAttributes')) {
-            return (array) $model->getTranslatableAttributes();
+        // Try to get metadata from the 'translations' relation if it exists
+        $table = null;
+        $foreignKey = null;
+
+        try {
+            if ($hasTranslationMethod || method_exists($model, 'getTranslationModelName')) {
+                $relation = $model->translations();
+                if ($relation instanceof \Illuminate\Database\Eloquent\Relations\HasMany) {
+                    $table = $relation->getRelated()->getTable();
+                    $foreignKey = $relation->getForeignKeyName();
+                }
+            }
+        } catch (\Throwable $e) {
+            // Fallback to guessing if relation call fails
         }
 
-        return [];
+        // Final fallback: Guessing (The smart way)
+        if (!$table) {
+            $baseTable = $model->getTable();
+            $singular = $this->getSingular($baseTable);
+            $table = $singular . '_translations';
+            $foreignKey = $singular . '_id';
+        }
+
+        return [
+            'fields' => $fields,
+            'table' => $table,
+            'foreign_key' => $foreignKey
+        ];
     }
 
     /**
