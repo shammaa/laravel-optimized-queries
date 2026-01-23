@@ -669,7 +669,11 @@ The package now supports all standard Eloquent retrieval methods, making it a dr
 $user = User::optimized()->find(1);
 $user = User::optimized()->findOrFail(1); // Throws ModelNotFoundException
 
-// 2. First Result
+// 2. Find by Slug (Supports translations automatically!)
+$article = Article::optimized()->findBySlug('my-article-slug');
+$article = Article::optimized()->findBySlugOrFail('my-slug', 'ar'); // Search in Arabic
+
+// 3. First Result
 $article = Article::optimized()->first();
 $article = Article::optimized()->firstOrFail(); // Throws ModelNotFoundException
 

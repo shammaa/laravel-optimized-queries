@@ -644,6 +644,7 @@ class OptimizedQueryBuilder
 
     /**
      * Filter by translated slug.
+     * Automatically detects if the slug is in the main table or translation table.
      *
      * @param string $slug The slug value to search for
      * @param string|null $locale Locale to search in (null = all locales)
@@ -652,15 +653,22 @@ class OptimizedQueryBuilder
      */
     public function whereTranslatedSlug(string $slug, ?string $locale = null, string $slugColumn = 'slug'): self
     {
+        // 1. If model doesn't have translations at all, search main table
         if (!$this->hasTranslations) {
             return $this->where($slugColumn, $slug);
         }
 
-        // Delegate to the model's whereTranslatedSlug scope if it exists
+        // 2. Check if the slug column is actually in the translatable fields
+        $translatableFields = $this->getTranslatableFields();
+        if (!in_array($slugColumn, $translatableFields)) {
+            // Slug is in main table even though the model is translatable
+            return $this->where($slugColumn, $slug);
+        }
+
+        // 3. Slug is in translations table - Delegate to scope or fallback
         if (method_exists($this->model, 'scopeWhereTranslatedSlug')) {
             $this->baseQuery->whereTranslatedSlug($slug, $locale, $slugColumn);
         } else {
-            // Fallback implementation
             $this->baseQuery->whereHas('translations', function ($query) use ($slug, $locale, $slugColumn) {
                 $query->where($slugColumn, $slug);
                 if ($locale) {
@@ -1058,6 +1066,44 @@ class OptimizedQueryBuilder
         if (is_null($result)) {
             throw (new \Illuminate\Database\Eloquent\ModelNotFoundException)->setModel(
                 get_class($this->model)
+            );
+        }
+
+        return $result;
+    }
+
+    /**
+     * Find a model by its slug.
+     * Automatically handles translated slugs if the model is translatable.
+     *
+     * @param string $slug
+     * @param string|null $locale
+     * @param string|null $format
+     * @return Model|array|object|null
+     */
+    public function findBySlug(string $slug, ?string $locale = null, ?string $format = null): object|array|null
+    {
+        return $this->whereTranslatedSlug($slug, $locale)->first($format);
+    }
+
+    /**
+     * Find a model by its slug or throw an exception.
+     * Automatically handles translated slugs if the model is translatable.
+     *
+     * @param string $slug
+     * @param string|null $locale
+     * @param string|null $format
+     * @return Model|array|object
+     *
+     * @throws \Illuminate\Database\Eloquent\ModelNotFoundException
+     */
+    public function findBySlugOrFail(string $slug, ?string $locale = null, ?string $format = null): object|array
+    {
+        $result = $this->findBySlug($slug, $locale, $format);
+
+        if (is_null($result)) {
+            throw (new \Illuminate\Database\Eloquent\ModelNotFoundException)->setModel(
+                get_class($this->model), [$slug]
             );
         }
 
