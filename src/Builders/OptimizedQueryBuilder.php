@@ -1454,8 +1454,10 @@ class OptimizedQueryBuilder
 
         $allColumns = array_unique(array_merge($columns, $fillable));
         
-        // Exclude translatable columns (they're in the translations table)
-        return $this->excludeTranslatableColumns($allColumns);
+        if (!$this->translationLocale && $this->hasTranslations) {
+            return $this->excludeTranslatableColumns($allColumns);
+        }
+        return $allColumns;
     }
 
     /**
@@ -1794,7 +1796,7 @@ class OptimizedQueryBuilder
 
             if ($format === 'eloquent') {
                 $model = $this->model->newInstance([], true);
-                $model->setRawAttributes($result);
+                $model->setRawAttributes((array) $result, true);
                 foreach ($relationResults as $name => $val) {
                     $model->setRelation($name, $val);
                 }
