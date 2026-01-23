@@ -491,39 +491,47 @@ class RelationBuilder
     }
 
     /**
-     * Get translatable fields from a model if it uses HasTranslations.
+     * Get translatable fields from a model if it uses our specific translation system.
+     * Checks for HasTranslations trait AND the existence of a translations() relation.
      *
      * @param Model $model
      * @return array
      */
     protected function getTranslatableFieldsFromModel(Model $model): array
     {
-        // Check if model uses HasTranslations trait
+        // Check if model uses common translation traits
         $traits = class_uses_recursive($model);
-        $hasTranslations = false;
+        $likelyTranslatable = false;
         
         foreach ($traits as $trait) {
             if (str_contains($trait, 'HasTranslations') || str_contains($trait, 'Translatable')) {
-                $hasTranslations = true;
+                $likelyTranslatable = true;
                 break;
             }
         }
 
-        if (!$hasTranslations && !method_exists($model, 'translations')) {
+        // To avoid conflicts with JSON-based translations (like Spatie),
+        // we MUST verify the model has a translations() relation (table-based).
+        if (!$likelyTranslatable && !method_exists($model, 'translations')) {
             return [];
         }
 
-        // Get translatable fields
+        // If it looks translatable but doesn't have the translations relation, skip it
+        // This is the safety check for Spatie/other JSON translation systems
+        if (!method_exists($model, 'translations')) {
+            return [];
+        }
+
+        // Get translatable fields from the property or method
         if (property_exists($model, 'translatable')) {
-            return $model->translatable ?? [];
+            return (array) $model->translatable;
         }
 
         if (method_exists($model, 'getTranslatableAttributes')) {
-            return $model->getTranslatableAttributes();
+            return (array) $model->getTranslatableAttributes();
         }
 
-        // Common translatable fields as fallback
-        return ['title', 'name', 'description', 'content', 'slug', 'short_description', 'meta_title', 'meta_description', 'meta_keywords'];
+        return [];
     }
 
     /**
