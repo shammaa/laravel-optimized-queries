@@ -1143,6 +1143,7 @@ class OptimizedQueryBuilder
     protected function buildQuery(): string
     {
         $relationBuilder = new RelationBuilder($this->model, $this->baseQuery);
+        $relationBuilder->setLocale($this->translationLocale);
         
         // Build base query - use base query as subquery if it has complex conditions
         $baseTable = $this->model->getTable();
