@@ -337,7 +337,7 @@ class RelationBuilder
     }
 
     /**
-     * Build JSON for belongsToMany relation.
+     * Build JSON for belongsToMany or morphToMany relation.
      * Supports translations by joining with the translations table.
      *
      * @param Relation $relation
@@ -408,6 +408,14 @@ class RelationBuilder
             $translationJoinClause = " LEFT JOIN {$translationsTable} AS {$translationsAlias} ON {$relatedTable}.{$modelKey} = {$translationsAlias}.{$foreignKeyInTranslations} AND {$translationsAlias}.locale = '{$locale}'";
         }
 
+        // Handle MorphToMany specific conditions (e.g., taggable_type)
+        $morphCondition = '';
+        if ($relation instanceof \Illuminate\Database\Eloquent\Relations\MorphToMany) {
+            $morphType = $relation->getMorphType();
+            $morphClass = $relation->getMorphClass();
+            $morphCondition = " AND {$pivotTable}.{$morphType} = '{$morphClass}'";
+        }
+
         // Use JSON_ARRAYAGG if supported, otherwise fallback to GROUP_CONCAT
         if ($this->supportsJsonArrayAgg) {
             $arrayAgg = "JSON_ARRAYAGG({$jsonSql})";
@@ -415,7 +423,7 @@ class RelationBuilder
             $arrayAgg = "CONCAT('[', COALESCE(GROUP_CONCAT({$jsonSql} SEPARATOR ','), ''), ']')";
         }
 
-        return "(SELECT {$arrayAgg} FROM {$relatedTable} INNER JOIN {$pivotTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey}{$translationJoinClause} WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}) AS {$relationName}";
+        return "(SELECT {$arrayAgg} FROM {$relatedTable} INNER JOIN {$pivotTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey}{$translationJoinClause} WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}{$morphCondition}) AS {$relationName}";
     }
 
     /**
