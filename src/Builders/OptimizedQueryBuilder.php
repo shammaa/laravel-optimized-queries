@@ -783,18 +783,8 @@ class OptimizedQueryBuilder
      */
     protected function getTranslatableFields(): array
     {
-        // Try to get from model's translatable property
-        if (property_exists($this->model, 'translatable')) {
-            return $this->model->translatable ?? [];
-        }
-
-        // Try to get from getTranslatableAttributes method
-        if (method_exists($this->model, 'getTranslatableAttributes')) {
-            return $this->model->getTranslatableAttributes();
-        }
-
-        // Common translatable fields as fallback
-        return ['title', 'name', 'description', 'content', 'slug'];
+        $meta = $this->getTranslationMetadata($this->model);
+        return $meta['fields'] ?? [];
     }
 
     /**
@@ -1331,7 +1321,27 @@ class OptimizedQueryBuilder
         $baseTable = $this->model->getTable();
         $baseColumns = $this->getBaseColumns();
         
-        $selects = array_map(function ($col) use ($baseTable) {
+        $translationJoinSql = '';
+        $transFields = [];
+        $transAlias = 'main_trans';
+
+        if ($this->hasTranslations && $this->translationLocale) {
+            $meta = $this->getTranslationMetadata($this->model);
+            if (!empty($meta['fields']) && $meta['table']) {
+                $transFields = $meta['fields'];
+                $transTable = $meta['table'];
+                $foreignKey = $meta['foreign_key'];
+                $modelKey = $this->model->getKeyName();
+                $locale = $this->translationLocale;
+                
+                $translationJoinSql = " LEFT JOIN {$transTable} AS {$transAlias} ON {$baseTable}.{$modelKey} = {$transAlias}.{$foreignKey} AND {$transAlias}.locale = '{$locale}'";
+            }
+        }
+
+        $selects = array_map(function ($col) use ($baseTable, $transFields, $transAlias) {
+            if (in_array($col, $transFields)) {
+                return "{$transAlias}.{$col} AS {$col}";
+            }
             return "{$baseTable}.{$col}";
         }, $baseColumns);
 
@@ -1389,10 +1399,10 @@ class OptimizedQueryBuilder
             
             // Use cloned query as subquery with relations
             $baseQuerySql = $clonedQuery->toSql();
-            $sql = "SELECT " . implode(', ', $selects) . " FROM ({$baseQuerySql}) AS {$baseTable}";
+            $sql = "SELECT " . implode(', ', $selects) . " FROM ({$baseQuerySql}) AS {$baseTable}{$translationJoinSql}";
         } else {
             // Build final SQL normally
-            $sql = "SELECT " . implode(', ', $selects) . " FROM {$baseTable}";
+            $sql = "SELECT " . implode(', ', $selects) . " FROM {$baseTable}{$translationJoinSql}";
             
             if (!empty($wheres)) {
                 $sql .= " WHERE " . implode(' AND ', $wheres);
@@ -1860,6 +1870,103 @@ class OptimizedQueryBuilder
         ]));
 
         return config('optimized-queries.cache_prefix', 'optimized_queries:') . $key;
+    }
+
+    /**
+     * Get translatable fields and metadata from a model.
+     *
+     * @param Model $model
+     * @return array{fields: array, table: string|null, foreign_key: string|null}
+     */
+    protected function getTranslationMetadata(Model $model): array
+    {
+        $traits = class_uses_recursive($model);
+        $isTranslatable = false;
+        
+        foreach ($traits as $trait) {
+            if (str_contains($trait, 'HasTranslations') || str_contains($trait, 'Translatable')) {
+                $isTranslatable = true;
+                break;
+            }
+        }
+
+        // If not translatable by trait/property/method, return empty
+        $hasProperty = property_exists($model, 'translatable');
+        $hasMethod = method_exists($model, 'getTranslatableAttributes');
+        $hasTranslationMethod = method_exists($model, 'translations');
+
+        if (!$isTranslatable && !$hasProperty && !$hasMethod && !$hasTranslationMethod) {
+            return ['fields' => [], 'table' => null, 'foreign_key' => null];
+        }
+
+        // Get translatable fields
+        $fields = [];
+        if ($hasProperty) {
+            $fields = (array) $model->translatable;
+        } elseif ($hasMethod) {
+            $fields = (array) $model->getTranslatableAttributes();
+        }
+
+        if (empty($fields)) {
+            return ['fields' => [], 'table' => null, 'foreign_key' => null];
+        }
+
+        // Try to get metadata from the 'translations' relation if it exists
+        $table = null;
+        $foreignKey = null;
+
+        try {
+            if ($hasTranslationMethod || method_exists($model, 'getTranslationModelName')) {
+                $relation = $model->translations();
+                if ($relation instanceof \Illuminate\Database\Eloquent\Relations\HasMany) {
+                    $table = $relation->getRelated()->getTable();
+                    $foreignKey = $relation->getForeignKeyName();
+                }
+            }
+        } catch (\Throwable $e) {
+            // Fallback to guessing if relation call fails
+        }
+
+        // Final fallback: Guessing (The smart way)
+        if (!$table) {
+            $baseTable = $model->getTable();
+            $singular = $this->getSingular($baseTable);
+            $table = $singular . '_translations';
+            $foreignKey = $singular . '_id';
+        }
+
+        return [
+            'fields' => $fields,
+            'table' => $table,
+            'foreign_key' => $foreignKey
+        ];
+    }
+
+    /**
+     * Get singular form of a table name.
+     *
+     * @param string $table
+     * @return string
+     */
+    protected function getSingular(string $table): string
+    {
+        // Use Laravel's Str::singular if available
+        if (class_exists(\Illuminate\Support\Str::class)) {
+            return \Illuminate\Support\Str::singular($table);
+        }
+
+        // Simple fallback for common cases
+        if (str_ends_with($table, 'ies')) {
+            return substr($table, 0, -3) . 'y';
+        }
+        if (str_ends_with($table, 'es')) {
+            return substr($table, 0, -2);
+        }
+        if (str_ends_with($table, 's')) {
+            return substr($table, 0, -1);
+        }
+
+        return $table;
     }
 
     /**
