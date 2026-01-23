@@ -45,6 +45,8 @@ class OptimizedQueryBuilder
     protected ?string $requestedFormat = null;
     protected array $cacheTags = [];
     protected static array $requestCache = [];
+    protected bool $hasTranslations = false;
+    protected ?string $translationLocale = null;
 
     public function __construct(Builder $baseQuery)
     {
@@ -53,10 +55,35 @@ class OptimizedQueryBuilder
         $this->enableCache = config('optimized-queries.enable_cache', true);
         $this->enablePerformanceMonitoring = config('optimized-queries.enable_performance_monitoring', true);
         
+        // Auto-detect if model uses HasTranslations trait
+        $this->hasTranslations = $this->modelHasTranslations();
+        $this->translationLocale = app()->getLocale();
+        
         if ($this->enablePerformanceMonitoring) {
             $this->performanceMonitor = new PerformanceMonitor();
             $this->performanceMonitor->start();
         }
+    }
+
+    /**
+     * Check if the model uses HasTranslations trait.
+     *
+     * @return bool
+     */
+    protected function modelHasTranslations(): bool
+    {
+        $traits = class_uses_recursive($this->model);
+        
+        // Check for common translation trait names
+        foreach ($traits as $trait) {
+            if (str_contains($trait, 'HasTranslations') || 
+                str_contains($trait, 'Translatable')) {
+                return true;
+            }
+        }
+        
+        // Also check if model has the translations() relation
+        return method_exists($this->model, 'translations');
     }
 
     /**
@@ -533,6 +560,229 @@ class OptimizedQueryBuilder
     {
         $this->useFullTextSearch = $enable;
         return $this;
+    }
+
+    // =====================================================
+    // TRANSLATION SUPPORT METHODS
+    // Compatible with shammaa/laravel-model-translations
+    // =====================================================
+
+    /**
+     * Set the locale for translation queries.
+     *
+     * @param string $locale
+     * @return $this
+     */
+    public function locale(string $locale): self
+    {
+        $this->translationLocale = $locale;
+        return $this;
+    }
+
+    /**
+     * Load translations for the current or specified locale.
+     * This performs a LEFT JOIN with the translations table for optimal performance.
+     *
+     * @param string|null $locale Locale to load (null = current app locale)
+     * @return $this
+     */
+    public function withTranslation(?string $locale = null): self
+    {
+        if (!$this->hasTranslations) {
+            Log::warning('Model ' . get_class($this->model) . ' does not use translations trait');
+            return $this;
+        }
+
+        $locale = $locale ?? $this->translationLocale;
+        $this->translationLocale = $locale;
+
+        // Delegate to the model's withTranslation scope if it exists
+        if (method_exists($this->model, 'scopeWithTranslation')) {
+            $this->baseQuery->withTranslation($locale);
+        }
+
+        return $this;
+    }
+
+    /**
+     * Filter by a translated field.
+     *
+     * @param string $field The translatable field name
+     * @param string $operator Comparison operator
+     * @param mixed $value Value to compare
+     * @param string|null $locale Locale to search in (null = current locale)
+     * @return $this
+     */
+    public function whereTranslation(string $field, string $operator, mixed $value = null, ?string $locale = null): self
+    {
+        if (!$this->hasTranslations) {
+            // Fallback to regular where if no translations
+            return $this->where($field, $operator, $value);
+        }
+
+        // Handle 2-argument syntax: whereTranslation('title', 'Laravel')
+        if ($value === null) {
+            $value = $operator;
+            $operator = '=';
+        }
+
+        $locale = $locale ?? $this->translationLocale;
+
+        // Delegate to the model's whereTranslation scope if it exists
+        if (method_exists($this->model, 'scopeWhereTranslation')) {
+            $this->baseQuery->whereTranslation($field, $operator, $value, $locale);
+        } else {
+            // Fallback: use whereHas on translations relation
+            $this->baseQuery->whereHas('translations', function ($query) use ($field, $operator, $value, $locale) {
+                $query->where('locale', $locale)
+                      ->where($field, $operator, $value);
+            });
+        }
+
+        return $this;
+    }
+
+    /**
+     * Filter by translated slug.
+     *
+     * @param string $slug The slug value to search for
+     * @param string|null $locale Locale to search in (null = all locales)
+     * @param string $slugColumn The slug column name (default: 'slug')
+     * @return $this
+     */
+    public function whereTranslatedSlug(string $slug, ?string $locale = null, string $slugColumn = 'slug'): self
+    {
+        if (!$this->hasTranslations) {
+            return $this->where($slugColumn, $slug);
+        }
+
+        // Delegate to the model's whereTranslatedSlug scope if it exists
+        if (method_exists($this->model, 'scopeWhereTranslatedSlug')) {
+            $this->baseQuery->whereTranslatedSlug($slug, $locale, $slugColumn);
+        } else {
+            // Fallback implementation
+            $this->baseQuery->whereHas('translations', function ($query) use ($slug, $locale, $slugColumn) {
+                $query->where($slugColumn, $slug);
+                if ($locale) {
+                    $query->where('locale', $locale);
+                }
+            });
+        }
+
+        return $this;
+    }
+
+    /**
+     * Order by a translated field.
+     *
+     * @param string $field The translatable field name
+     * @param string $direction Sort direction (asc or desc)
+     * @param string|null $locale Locale to order by (null = current locale)
+     * @return $this
+     */
+    public function orderByTranslation(string $field, string $direction = 'asc', ?string $locale = null): self
+    {
+        if (!$this->hasTranslations) {
+            return $this->orderBy($field, $direction);
+        }
+
+        $locale = $locale ?? $this->translationLocale;
+
+        // Delegate to the model's orderByTranslation scope if it exists
+        if (method_exists($this->model, 'scopeOrderByTranslation')) {
+            $this->baseQuery->orderByTranslation($field, $direction, $locale);
+        }
+
+        return $this;
+    }
+
+    /**
+     * Find models without translation for a specific locale.
+     *
+     * @param string|null $locale Locale to check (null = current locale)
+     * @return $this
+     */
+    public function emptyTranslation(?string $locale = null): self
+    {
+        if (!$this->hasTranslations) {
+            return $this;
+        }
+
+        $locale = $locale ?? $this->translationLocale;
+
+        // Delegate to the model's emptyTranslation scope if it exists
+        if (method_exists($this->model, 'scopeEmptyTranslation')) {
+            $this->baseQuery->emptyTranslation($locale);
+        } else {
+            // Fallback: use whereDoesntHave
+            $this->baseQuery->whereDoesntHave('translations', function ($query) use ($locale) {
+                $query->where('locale', $locale);
+            });
+        }
+
+        return $this;
+    }
+
+    /**
+     * Search in translated fields.
+     *
+     * @param string $term Search term
+     * @param array|string|null $fields Translated fields to search in (null = auto-detect)
+     * @param string|null $locale Locale to search in (null = current locale)
+     * @return $this
+     */
+    public function searchTranslation(string $term, array|string|null $fields = null, ?string $locale = null): self
+    {
+        if (!$this->hasTranslations || empty(trim($term))) {
+            return $this;
+        }
+
+        $term = trim($term);
+        $locale = $locale ?? $this->translationLocale;
+        $fields = is_string($fields) ? [$fields] : ($fields ?? $this->getTranslatableFields());
+
+        // Use whereHas to search in translations
+        $this->baseQuery->whereHas('translations', function ($query) use ($term, $fields, $locale) {
+            $query->where('locale', $locale)
+                  ->where(function ($q) use ($term, $fields) {
+                      foreach ($fields as $field) {
+                          $q->orWhere($field, 'LIKE', '%' . $term . '%');
+                      }
+                  });
+        });
+
+        return $this;
+    }
+
+    /**
+     * Get translatable fields from the model.
+     *
+     * @return array
+     */
+    protected function getTranslatableFields(): array
+    {
+        // Try to get from model's translatable property
+        if (property_exists($this->model, 'translatable')) {
+            return $this->model->translatable ?? [];
+        }
+
+        // Try to get from getTranslatableAttributes method
+        if (method_exists($this->model, 'getTranslatableAttributes')) {
+            return $this->model->getTranslatableAttributes();
+        }
+
+        // Common translatable fields as fallback
+        return ['title', 'name', 'description', 'content', 'slug'];
+    }
+
+    /**
+     * Check if the model has translation support enabled.
+     *
+     * @return bool
+     */
+    public function hasTranslationSupport(): bool
+    {
+        return $this->hasTranslations;
     }
 
     /**

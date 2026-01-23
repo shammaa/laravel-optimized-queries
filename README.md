@@ -33,6 +33,7 @@ Transform **5-15 queries** into **1 optimized query** - reducing execution time 
 - ✅ **Simple & Clear API** - Short methods like `with()`, `optimized()`, `opt()`, `withColumns()`
 - ✅ **Auto Column Detection** - Automatically detects columns from model's `$fillable`
 - ✅ **Explicit Column Control** - Specify columns explicitly for better performance
+- ✅ **🌍 Translation Integration** - Seamless integration with `shammaa/laravel-model-translations` for multilingual queries!
 
 ---
 
@@ -658,6 +659,209 @@ $articles = Article::optimized()->asEloquent()->get();
 ```
 
 You can change the global default in `config/optimized-queries.php` by setting `default_format`.
+
+---
+
+## 🌍 Translation Integration (NEW!)
+
+**Seamless integration with `shammaa/laravel-model-translations`** - Query translated content with maximum performance!
+
+### Auto-Detection
+
+The library automatically detects if your model uses the `HasTranslations` trait and enables translation support:
+
+```php
+use Shammaa\LaravelModelTranslations\Traits\HasTranslations;
+use Shammaa\LaravelOptimizedQueries\Traits\HasOptimizedQueries;
+
+class Article extends Model
+{
+    use HasTranslations, HasOptimizedQueries;
+    
+    protected $translatable = ['title', 'slug', 'content', 'excerpt'];
+}
+```
+
+### Available Translation Methods
+
+#### 1. Load Translations (LEFT JOIN - Fast!)
+
+```php
+// Load translations for current locale
+$articles = Article::optimized()
+    ->withTranslation()  // LEFT JOIN with translations table
+    ->with('author')
+    ->with('category')
+    ->get();
+
+// Load translations for specific locale
+$articles = Article::optimized()
+    ->withTranslation('ar')  // Arabic translations
+    ->with('author')
+    ->get();
+```
+
+#### 2. Set Locale for All Translation Queries
+
+```php
+// Set locale once, use everywhere
+$articles = Article::optimized()
+    ->locale('ar')           // Set locale
+    ->withTranslation()      // Uses 'ar'
+    ->whereTranslation('title', 'like', '%لارافيل%')  // Uses 'ar'
+    ->orderByTranslation('title')  // Uses 'ar'
+    ->get();
+```
+
+#### 3. Filter by Translated Fields
+
+```php
+// Simple equality
+$articles = Article::optimized()
+    ->withTranslation()
+    ->whereTranslation('title', 'مقال جديد')  // Exact match
+    ->get();
+
+// With operators
+$articles = Article::optimized()
+    ->withTranslation()
+    ->whereTranslation('title', 'like', '%Laravel%')
+    ->get();
+
+// In specific locale
+$articles = Article::optimized()
+    ->withTranslation()
+    ->whereTranslation('title', '=', 'English Title', 'en')
+    ->get();
+```
+
+#### 4. Filter by Translated Slug
+
+```php
+// Find by slug (searches current locale)
+$article = Article::optimized()
+    ->withTranslation()
+    ->whereTranslatedSlug('my-article-slug')
+    ->with('author')
+    ->first();
+
+// Find by slug in specific locale
+$article = Article::optimized()
+    ->withTranslation()
+    ->whereTranslatedSlug('مقالي-الجديد', 'ar')
+    ->with('author')
+    ->first();
+
+// Custom slug column name
+$article = Article::optimized()
+    ->whereTranslatedSlug('my-slug', null, 'url_slug')
+    ->first();
+```
+
+#### 5. Order by Translated Fields
+
+```php
+// Order by translated title
+$articles = Article::optimized()
+    ->withTranslation()
+    ->orderByTranslation('title', 'asc')
+    ->with('author')
+    ->get();
+
+// Order by translated title in specific locale
+$articles = Article::optimized()
+    ->withTranslation()
+    ->orderByTranslation('title', 'desc', 'en')
+    ->get();
+```
+
+#### 6. Find Models Without Translations
+
+```php
+// Find articles without Arabic translation
+$missing = Article::optimized()
+    ->emptyTranslation('ar')
+    ->get();
+
+// Find articles without current locale translation
+$missing = Article::optimized()
+    ->emptyTranslation()
+    ->get();
+```
+
+#### 7. Search in Translated Fields
+
+```php
+// Search in all translatable fields
+$articles = Article::optimized()
+    ->searchTranslation('لارافيل')  // Auto-detects translatable fields
+    ->with('author')
+    ->get();
+
+// Search in specific translated fields
+$articles = Article::optimized()
+    ->searchTranslation('Laravel', ['title', 'content'])
+    ->with('author')
+    ->get();
+
+// Search in specific locale
+$articles = Article::optimized()
+    ->searchTranslation('PHP', ['title', 'excerpt'], 'en')
+    ->get();
+```
+
+### Complete Example: Multilingual Blog
+
+```php
+// Get published articles with translations, author, and category
+$articles = Article::optimized()
+    ->locale('ar')                                    // Set Arabic locale
+    ->withTranslation()                               // JOIN translations
+    ->whereTranslation('title', 'like', '%لارافيل%')  // Filter by Arabic title
+    ->orderByTranslation('title', 'asc')              // Order by Arabic title
+    ->with(['author', 'category'])                    // Load relations
+    ->withCount('comments')                           // Count comments
+    ->where('status', 'published')                    // Filter by status
+    ->cache(3600)                                     // Cache for 1 hour
+    ->paginate(15);
+
+// Result: Single optimized query with translations + relations!
+```
+
+### Using with Base Query (Advanced)
+
+```php
+// Method 1: Pass base query with translation scopes
+$baseQuery = Article::withTranslation()
+    ->whereTranslation('title', 'like', '%Laravel%')
+    ->orderByTranslation('title', 'asc');
+
+$articles = Article::optimized($baseQuery)
+    ->with(['author', 'category', 'tags'])
+    ->withCount('comments')
+    ->cache(3600)
+    ->get();
+
+// Method 2: Use built-in translation methods (simpler!)
+$articles = Article::optimized()
+    ->withTranslation()
+    ->whereTranslation('title', 'like', '%Laravel%')
+    ->orderByTranslation('title', 'asc')
+    ->with(['author', 'category', 'tags'])
+    ->withCount('comments')
+    ->cache(3600)
+    ->get();
+```
+
+### Check Translation Support
+
+```php
+$builder = Article::optimized();
+
+if ($builder->hasTranslationSupport()) {
+    $builder->withTranslation();
+}
+```
 
 ---
 
