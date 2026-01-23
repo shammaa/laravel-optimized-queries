@@ -1247,7 +1247,7 @@ class OptimizedQueryBuilder
             $table = $this->model->getTable();
             $cached = config("optimized-queries.column_cache.{$table}");
             if ($cached) {
-                return $cached;
+                return $this->excludeTranslatableColumns($cached);
             }
             
             // Fallback: get all columns from table
@@ -1266,7 +1266,32 @@ class OptimizedQueryBuilder
             $columns[] = $this->model->getDeletedAtColumn();
         }
 
-        return array_unique(array_merge($columns, $fillable));
+        $allColumns = array_unique(array_merge($columns, $fillable));
+        
+        // Exclude translatable columns (they're in the translations table)
+        return $this->excludeTranslatableColumns($allColumns);
+    }
+
+    /**
+     * Exclude translatable columns from the base table columns.
+     * Translatable columns are stored in the translations table, not the main table.
+     *
+     * @param array $columns
+     * @return array
+     */
+    protected function excludeTranslatableColumns(array $columns): array
+    {
+        if (!$this->hasTranslations) {
+            return $columns;
+        }
+
+        $translatableColumns = $this->getTranslatableFields();
+        
+        if (empty($translatableColumns)) {
+            return $columns;
+        }
+
+        return array_values(array_diff($columns, $translatableColumns));
     }
 
     /**
