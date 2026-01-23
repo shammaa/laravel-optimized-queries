@@ -42,6 +42,7 @@ class OptimizedQueryBuilder
     protected ?PerformanceMonitor $performanceMonitor = null;
     protected array $selectedColumns = [];
     protected ?Builder $finalQuery = null;
+    protected array $relationBindings = [];
     protected ?string $requestedFormat = null;
     protected array $cacheTags = [];
     protected static array $requestCache = [];
@@ -63,6 +64,19 @@ class OptimizedQueryBuilder
             $this->performanceMonitor = new PerformanceMonitor();
             $this->performanceMonitor->start();
         }
+    }
+
+    /**
+     * Handle dynamic calls to the builder to support scopes.
+     *
+     * @param string $method
+     * @param array $parameters
+     * @return $this
+     */
+    public function __call(string $method, array $parameters): self
+    {
+        $this->baseQuery->$method(...$parameters);
+        return $this;
     }
 
     /**
@@ -1337,6 +1351,9 @@ class OptimizedQueryBuilder
             }
         }
 
+        // Collect all bindings from relation builder
+        $this->relationBindings = $relationBuilder->getBindings();
+
         // Build WHERE clauses
         $wheres = $this->buildWheres();
         
@@ -1680,8 +1697,9 @@ class OptimizedQueryBuilder
 
         // Merge bindings from final query (if exists) or base query and custom wheres
         $bindings = $this->finalQuery 
-            ? $this->finalQuery->getBindings()
+            ? array_merge($this->relationBindings, $this->finalQuery->getBindings())
             : array_merge(
+                $this->relationBindings,
                 $this->baseQuery->getBindings(),
                 $this->getCustomBindings()
             );

@@ -18,6 +18,7 @@ class RelationBuilder
     protected string $jsonFunction;
     protected bool $supportsJsonArrayAgg;
     protected ?string $locale = null;
+    protected array $bindings = [];
 
     public function __construct(Model $model, Builder $baseQuery)
     {
@@ -38,6 +39,16 @@ class RelationBuilder
     {
         $this->locale = $locale;
         return $this;
+    }
+
+    /**
+     * Get collected bindings.
+     *
+     * @return array
+     */
+    public function getBindings(): array
+    {
+        return $this->bindings;
     }
 
     /**
@@ -109,7 +120,7 @@ class RelationBuilder
             $callback($subQuery);
             $wheres = $subQuery->getQuery()->wheres ?? [];
             if (!empty($wheres)) {
-                $whereClause = $this->buildWhereClause($wheres, $relatedTable);
+                $whereClause = $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
             }
         }
 
@@ -192,7 +203,7 @@ class RelationBuilder
             $callback($subQuery);
             $wheres = $subQuery->getQuery()->wheres ?? [];
             if (!empty($wheres)) {
-                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable);
+                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
             }
         }
 
@@ -287,7 +298,7 @@ class RelationBuilder
             $callback($subQuery);
             $wheres = $subQuery->getQuery()->wheres ?? [];
             if (!empty($wheres)) {
-                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable);
+                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
             }
         }
 
@@ -423,7 +434,18 @@ class RelationBuilder
             $arrayAgg = "CONCAT('[', COALESCE(GROUP_CONCAT({$jsonSql} SEPARATOR ','), ''), ']')";
         }
 
-        return "(SELECT {$arrayAgg} FROM {$relatedTable} INNER JOIN {$pivotTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey}{$translationJoinClause} WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}{$morphCondition}) AS {$relationName}";
+        // Build WHERE clause from callback
+        $whereClause = '';
+        if ($callback) {
+            $subQuery = $relation->getQuery();
+            $callback($subQuery);
+            $wheres = $subQuery->getQuery()->wheres ?? [];
+            if (!empty($wheres)) {
+                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
+            }
+        }
+
+        return "(SELECT {$arrayAgg} FROM {$relatedTable} INNER JOIN {$pivotTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey}{$translationJoinClause} WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}{$morphCondition}{$whereClause}) AS {$relationName}";
     }
 
     /**
@@ -459,7 +481,18 @@ class RelationBuilder
 
         $jsonSql = $this->jsonFunction . '(' . implode(', ', $jsonPairs) . ')';
 
-        return "(SELECT {$jsonSql} FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey} AND {$relatedTable}.{$morphType} = '{$morphClass}' LIMIT 1) AS {$relationName}";
+        // Build WHERE clause from callback
+        $whereClause = '';
+        if ($callback) {
+            $subQuery = $relation->getQuery();
+            $callback($subQuery);
+            $wheres = $subQuery->getQuery()->wheres ?? [];
+            if (!empty($wheres)) {
+                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
+            }
+        }
+
+        return "(SELECT {$jsonSql} FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey} AND {$relatedTable}.{$morphType} = '{$morphClass}'{$whereClause} LIMIT 1) AS {$relationName}";
     }
 
     /**
@@ -666,9 +699,10 @@ class RelationBuilder
      * @param string $table
      * @return string
      */
-    protected function buildWhereClause(array $wheres, string $table): string
+    protected function buildWhereClause(array $wheres, string $table, array $baseBindings = []): string
     {
         $conditions = [];
+        $bindingIndex = 0;
 
         foreach ($wheres as $where) {
             $column = $where['column'] ?? null;
@@ -681,13 +715,22 @@ class RelationBuilder
                 if ($operator === 'IN' && is_array($value)) {
                     $placeholders = implode(',', array_fill(0, count($value), '?'));
                     $conditions[] = "{$fullColumn} IN ({$placeholders})";
+                    foreach ($value as $val) {
+                        $this->bindings[] = $val;
+                    }
                 } else {
                     $conditions[] = "{$fullColumn} {$operator} ?";
+                    if (isset($baseBindings[$bindingIndex])) {
+                        $this->bindings[] = $baseBindings[$bindingIndex];
+                        $bindingIndex++;
+                    } else {
+                        $this->bindings[] = $value;
+                    }
                 }
             }
         }
 
-        return !empty($conditions) ? ' AND ' . implode(' AND ', $conditions) : '';
+        return !empty($conditions) ? ' ' . implode(' AND ', $conditions) : '';
     }
 
     /**
