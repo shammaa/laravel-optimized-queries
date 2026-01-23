@@ -1366,8 +1366,8 @@ class OptimizedQueryBuilder
         // Build ORDER BY
         $orderBys = $this->buildOrderBys();
 
-        // Check if base query has conditions - if so, use it as subquery
-        $hasBaseConditions = !empty($this->baseQuery->getQuery()->wheres);
+        // Check if base query has conditions or joins - if so, use it as subquery
+        $hasBaseConditions = !empty($this->baseQuery->getQuery()->wheres) || !empty($this->baseQuery->getQuery()->joins);
 
         // If we have base conditions (from Closure or other complex queries), use base query
         if ($hasBaseConditions) {

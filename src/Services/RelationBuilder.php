@@ -114,14 +114,13 @@ class RelationBuilder
         $callback = $countConfig['callback'] ?? null;
         $whereClause = '';
 
+        $subQuery = $relation->getQuery();
         if ($callback) {
-            // Apply callback to build WHERE clause
-            $subQuery = $relation->getQuery();
             $callback($subQuery);
-            $wheres = $subQuery->getQuery()->wheres ?? [];
-            if (!empty($wheres)) {
-                $whereClause = $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
-            }
+        }
+        $wheres = $subQuery->getQuery()->wheres ?? [];
+        if (!empty($wheres)) {
+            $whereClause = $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
         }
 
         return "(SELECT COUNT(*) FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey}{$whereClause}) AS {$relationName}_count";
@@ -196,15 +195,15 @@ class RelationBuilder
             $joinClause = " LEFT JOIN {$translationsTable} AS {$translationsAlias} ON {$relatedTable}.{$relatedKey} = {$translationsAlias}.{$foreignKeyInTranslations} AND {$translationsAlias}.locale = '{$locale}'";
         }
 
-        // Build WHERE clause from callback
+        // Build WHERE clause from relation and callback
         $whereClause = '';
+        $subQuery = $relation->getQuery();
         if ($callback) {
-            $subQuery = $relation->getQuery();
             $callback($subQuery);
-            $wheres = $subQuery->getQuery()->wheres ?? [];
-            if (!empty($wheres)) {
-                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
-            }
+        }
+        $wheres = $subQuery->getQuery()->wheres ?? [];
+        if (!empty($wheres)) {
+            $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
         }
 
         // Check if it's a BelongsTo relation (foreign key is in base table)
@@ -291,15 +290,15 @@ class RelationBuilder
             $joinClause = " LEFT JOIN {$translationsTable} AS {$translationsAlias} ON {$relatedTable}.{$relatedKey} = {$translationsAlias}.{$foreignKeyInTranslations} AND {$translationsAlias}.locale = '{$locale}'";
         }
 
-        // Build WHERE clause from callback
+        // Build WHERE clause from relation and callback
         $whereClause = '';
+        $subQuery = $relation->getQuery();
         if ($callback) {
-            $subQuery = $relation->getQuery();
             $callback($subQuery);
-            $wheres = $subQuery->getQuery()->wheres ?? [];
-            if (!empty($wheres)) {
-                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
-            }
+        }
+        $wheres = $subQuery->getQuery()->wheres ?? [];
+        if (!empty($wheres)) {
+            $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
         }
 
         // Use JSON_ARRAYAGG if supported, otherwise fallback to GROUP_CONCAT for MariaDB 10.4
@@ -434,15 +433,15 @@ class RelationBuilder
             $arrayAgg = "CONCAT('[', COALESCE(GROUP_CONCAT({$jsonSql} SEPARATOR ','), ''), ']')";
         }
 
-        // Build WHERE clause from callback
+        // Build WHERE clause from relation and callback
         $whereClause = '';
+        $subQuery = $relation->getQuery();
         if ($callback) {
-            $subQuery = $relation->getQuery();
             $callback($subQuery);
-            $wheres = $subQuery->getQuery()->wheres ?? [];
-            if (!empty($wheres)) {
-                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
-            }
+        }
+        $wheres = $subQuery->getQuery()->wheres ?? [];
+        if (!empty($wheres)) {
+            $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
         }
 
         return "(SELECT {$arrayAgg} FROM {$relatedTable} INNER JOIN {$pivotTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey}{$translationJoinClause} WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}{$morphCondition}{$whereClause}) AS {$relationName}";
@@ -481,15 +480,15 @@ class RelationBuilder
 
         $jsonSql = $this->jsonFunction . '(' . implode(', ', $jsonPairs) . ')';
 
-        // Build WHERE clause from callback
+        // Build WHERE clause from relation and callback
         $whereClause = '';
+        $subQuery = $relation->getQuery();
         if ($callback) {
-            $subQuery = $relation->getQuery();
             $callback($subQuery);
-            $wheres = $subQuery->getQuery()->wheres ?? [];
-            if (!empty($wheres)) {
-                $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
-            }
+        }
+        $wheres = $subQuery->getQuery()->wheres ?? [];
+        if (!empty($wheres)) {
+            $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
         }
 
         return "(SELECT {$jsonSql} FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey} AND {$relatedTable}.{$morphType} = '{$morphClass}'{$whereClause} LIMIT 1) AS {$relationName}";
@@ -802,4 +801,3 @@ class RelationBuilder
         }
     }
 }
-
