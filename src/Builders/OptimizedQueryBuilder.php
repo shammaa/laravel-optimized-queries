@@ -1044,6 +1044,128 @@ class OptimizedQueryBuilder
     }
 
     /**
+     * Execute the query and get the first result or throw an exception.
+     *
+     * @param string|null $format
+     * @return Model|array|object
+     *
+     * @throws \Illuminate\Database\Eloquent\ModelNotFoundException
+     */
+    public function firstOrFail(?string $format = null): object|array
+    {
+        $result = $this->first($format);
+
+        if (is_null($result)) {
+            throw (new \Illuminate\Database\Eloquent\ModelNotFoundException)->setModel(
+                get_class($this->model)
+            );
+        }
+
+        return $result;
+    }
+
+    /**
+     * Find a model by its primary key.
+     *
+     * @param mixed $id
+     * @param string|null $format
+     * @return Model|array|object|null
+     */
+    public function find(mixed $id, ?string $format = null): object|array|null
+    {
+        return $this->where($this->model->getKeyName(), $id)->first($format);
+    }
+
+    /**
+     * Find a model by its primary key or throw an exception.
+     *
+     * @param mixed $id
+     * @param string|null $format
+     * @return Model|array|object
+     *
+     * @throws \Illuminate\Database\Eloquent\ModelNotFoundException
+     */
+    public function findOrFail(mixed $id, ?string $format = null): object|array
+    {
+        $result = $this->find($id, $format);
+
+        if (is_null($result)) {
+            throw (new \Illuminate\Database\Eloquent\ModelNotFoundException)->setModel(
+                get_class($this->model), [$id]
+            );
+        }
+
+        return $result;
+    }
+
+    /**
+     * Get the count of the results.
+     *
+     * @return int
+     */
+    public function count(): int
+    {
+        $clonedQuery = clone $this->baseQuery;
+
+        foreach ($this->wheres as $where) {
+            if ($where['operator'] === 'IN') {
+                $clonedQuery->whereIn($where['column'], $where['value']);
+            } else {
+                $clonedQuery->where($where['column'], $where['operator'], $where['value']);
+            }
+        }
+
+        return $clonedQuery->count();
+    }
+
+    /**
+     * Determine if any rows exist for the current query.
+     *
+     * @return bool
+     */
+    public function exists(): bool
+    {
+        $clonedQuery = clone $this->baseQuery;
+
+        foreach ($this->wheres as $where) {
+            if ($where['operator'] === 'IN') {
+                $clonedQuery->whereIn($where['column'], $where['value']);
+            } else {
+                $clonedQuery->where($where['column'], $where['operator'], $where['value']);
+            }
+        }
+
+        return $clonedQuery->exists();
+    }
+
+    /**
+     * Get a single column's value from the first result of a query.
+     *
+     * @param string $column
+     * @return mixed
+     */
+    public function value(string $column)
+    {
+        $result = $this->first('array');
+
+        return $result ? ($result[$column] ?? null) : null;
+    }
+
+    /**
+     * Get a collection with the values of a given column.
+     *
+     * @param string $column
+     * @param string|null $key
+     * @return Collection
+     */
+    public function pluck(string $column, ?string $key = null): Collection
+    {
+        $results = $this->get('array');
+
+        return $results->pluck($column, $key);
+    }
+
+    /**
      * Paginate results.
      *
      * @param int $perPage

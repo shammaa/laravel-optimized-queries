@@ -659,6 +659,28 @@ $articles = Article::optimized()->asObject()->get();
 // 3. Eloquent (Full Laravel Model - Supports Accessors)
 $articles = Article::optimized()->asEloquent()->get();
 // Use: $article->title (Supports $article->formatted_date, etc.)
+
+### 🎯 Retrieving Results (NEW! Eloquent Compatibility)
+
+The package now supports all standard Eloquent retrieval methods, making it a drop-in replacement for traditional queries:
+
+```php
+// 1. Find by Primary Key
+$user = User::optimized()->find(1);
+$user = User::optimized()->findOrFail(1); // Throws ModelNotFoundException
+
+// 2. First Result
+$article = Article::optimized()->first();
+$article = Article::optimized()->firstOrFail(); // Throws ModelNotFoundException
+
+// 3. Aggregates & Checks
+$count = Article::optimized()->where('category_id', 1)->count();
+$exists = Article::optimized()->where('slug', 'my-post')->exists();
+
+// 4. Specific Values
+$title = Article::optimized()->where('id', 1)->value('title');
+$slugs = Article::optimized()->where('active', 1)->pluck('slug');
+```
 ```
 
 You can change the global default in `config/optimized-queries.php` by setting `default_format`.
