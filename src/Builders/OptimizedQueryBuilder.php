@@ -48,6 +48,7 @@ class OptimizedQueryBuilder
     protected static array $requestCache = [];
     protected bool $hasTranslations = false;
     protected ?string $translationLocale = null;
+    protected bool $safeMode = true; // Default to safe mode
 
     public function __construct(Builder $baseQuery)
     {
@@ -64,6 +65,8 @@ class OptimizedQueryBuilder
             $this->performanceMonitor = new PerformanceMonitor();
             $this->performanceMonitor->start();
         }
+        
+        $this->safeMode = config('optimized-queries.safe_mode', true);
     }
 
     /**
@@ -402,46 +405,11 @@ class OptimizedQueryBuilder
      */
     public function where(string|array|\Closure $column, mixed $operator = null, mixed $value = null): self
     {
-        // If closure is passed, delegate to base query
-        if ($column instanceof \Closure) {
-            $this->baseQuery->where($column);
-            return $this;
-        }
-
-        if (is_array($column)) {
-            foreach ($column as $key => $val) {
-                $this->wheres[] = ['column' => $key, 'operator' => '=', 'value' => $val];
-            }
-        } else {
-            $this->wheres[] = [
-                'column' => $column,
-                'operator' => $value === null ? '=' : $operator,
-                'value' => $value ?? $operator,
-            ];
-        }
-
+        // Delegate directly to base query to support Hybrid Loading and Scopes
+        $this->baseQuery->where($column, $operator, $value);
         return $this;
     }
 
-    /**
-     * Add where clause for active records (common use case).
-     *
-     * @return $this
-     */
-    public function active(): self
-    {
-        return $this->where('is_active', true);
-    }
-
-    /**
-     * Add where clause for published records (common use case).
-     *
-     * @return $this
-     */
-    public function published(): self
-    {
-        return $this->where('published', true);
-    }
 
     /**
      * Add where clause for latest records.
@@ -474,12 +442,7 @@ class OptimizedQueryBuilder
      */
     public function whereIn(string $column, array $values): self
     {
-        $this->wheres[] = [
-            'column' => $column,
-            'operator' => 'IN',
-            'value' => $values,
-        ];
-
+        $this->baseQuery->whereIn($column, $values);
         return $this;
     }
 
@@ -806,11 +769,7 @@ class OptimizedQueryBuilder
      */
     public function orderBy(string $column, string $direction = 'asc'): self
     {
-        $this->orderBys[] = [
-            'column' => $column,
-            'direction' => strtolower($direction) === 'desc' ? 'desc' : 'asc',
-        ];
-
+        $this->baseQuery->orderBy($column, $direction);
         return $this;
     }
 
@@ -974,13 +933,64 @@ class OptimizedQueryBuilder
             $cached = $cache->get($cacheKey);
             if ($cached !== null) {
                 self::$requestCache[$cacheKey] = $cached;
+                // If format is 'array', return directly to avoid object hydration overhead
+                if ($format === 'array') {
+                    return collect($cached);
+                }
                 return $this->formatResults($cached, $format);
             }
         }
 
-        // 3. Database Execution
-        $sql = $this->buildQuery();
-        $results = $this->executeQuery($sql);
+        // 3. Database Execution with Safe Mode Fallback
+        try {
+            $sql = $this->buildQuery();
+            $results = $this->executeQuery($sql);
+        } catch (\Throwable $e) {
+            if ($this->safeMode) {
+                // FALLBACK: Execute standard Eloquent query
+                Log::warning("OptimizedQueryBuilder Error: {$e->getMessage()}. Falling back to standard Eloquent query.");
+                
+                // Clone base query to avoid side effects
+                $fallbackQuery = clone $this->baseQuery;
+                
+                // Apply any pending wheres that might have been added to our builder but not the base query yet
+                foreach ($this->wheres as $where) {
+                   // Note: Complex nested wheres might be tricky to re-apply strictly, 
+                   // but usually baseQuery holds the truth.
+                   // Here we mainly rely on $this->baseQuery being the source of truth.
+                }
+
+                // Add relations
+                $relationsToLoad = [];
+                foreach ($this->relations as $relation) {
+                    // Convert our relation config back to Eloquent 'with' syntax
+                    $relationsToLoad[] = $relation['name']; 
+                }
+                
+                if (!empty($relationsToLoad)) {
+                    $fallbackQuery->with($relationsToLoad);
+                }
+                
+                // Apply sorting
+                foreach ($this->orderBys as $orderBy) {
+                    $fallbackQuery->orderBy($orderBy['column'], $orderBy['direction']);
+                }
+                
+                if ($this->limit) {
+                    $fallbackQuery->limit($this->limit);
+                }
+                
+                if ($this->offset) {
+                    $fallbackQuery->offset($this->offset);
+                }
+
+                // Execute fallback
+                return $fallbackQuery->get();
+            }
+
+            // If not safe mode, re-throw
+            throw $e;
+        }
 
         // Stop performance monitoring after query execution
         if ($this->performanceMonitor) {
@@ -999,7 +1009,35 @@ class OptimizedQueryBuilder
 
         self::$requestCache[$cacheKey] = $results;
 
+        // If requested format is array (API mode), return collection of arrays directly
+        if ($format === 'array') {
+            return collect($results);
+        }
+
         return $this->formatResults($results, $format);
+    }
+
+    /**
+     * Enable or disable safe mode (fallback to Eloquent on error).
+     *
+     * @param bool $enable
+     * @return $this
+     */
+    public function safeMode(bool $enable = true): self
+    {
+        $this->safeMode = $enable;
+        return $this;
+    }
+
+    /**
+     * Get optimized API response.
+     * This bypasses model hydration completely for maximum performance.
+     * 
+     * @return array
+     */
+    public function toApi(): array
+    {
+        return $this->get('array')->all();
     }
 
     /**
