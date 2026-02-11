@@ -7,16 +7,20 @@ namespace Shammaa\LaravelOptimizedQueries\Services;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\MorphToMany;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Shammaa\LaravelOptimizedQueries\Support\TranslationResolver;
 
 class RelationBuilder
 {
     protected Model $model;
     protected Builder $baseQuery;
     protected string $driver;
-    protected string $jsonFunction;
-    protected bool $supportsJsonArrayAgg;
     protected ?string $locale = null;
     protected array $bindings = [];
 
@@ -25,15 +29,10 @@ class RelationBuilder
         $this->model = $model;
         $this->baseQuery = $baseQuery;
         $this->driver = $this->detectDriver();
-        $this->jsonFunction = $this->getJsonFunction();
-        $this->supportsJsonArrayAgg = $this->checkJsonArrayAggSupport();
     }
 
     /**
      * Set the locale for translation queries.
-     *
-     * @param string|null $locale
-     * @return $this
      */
     public function setLocale(?string $locale): self
     {
@@ -43,8 +42,7 @@ class RelationBuilder
 
     /**
      * Get collected bindings.
-     *
-     * @return array
+     * These should be added to the main query's 'select' binding type.
      */
     public function getBindings(): array
     {
@@ -53,689 +51,601 @@ class RelationBuilder
 
     /**
      * Build JSON aggregation for a relation.
-     *
-     * @param array $relationConfig
-     * @return string|null
      */
     public function buildRelationJson(array $relationConfig): ?string
     {
-        $relationName = $relationConfig['name'];
-        $type = $relationConfig['type'] ?? 'relation';
+        $name = $relationConfig['name'];
+        $type = $relationConfig['type'];
         $columns = $relationConfig['columns'] ?? ['*'];
         $callback = $relationConfig['callback'] ?? null;
 
-        // Handle nested relations separately (they contain dots)
-        if ($type === 'nested' || str_contains($relationName, '.')) {
-            return $this->buildNestedRelationJson($relationName, $columns, $callback);
-        }
-
-        // For non-nested relations, get the relation instance
-        if (!method_exists($this->model, $relationName)) {
+        if (!method_exists($this->model, explode('.', $name)[0])) {
             return null;
         }
 
-        $relation = $this->model->{$relationName}();
-
-        if (!$relation instanceof Relation) {
+        try {
+            return match ($type) {
+                'single' => $this->buildSingleRelationJson($this->model->{$name}(), $name, $columns, $callback),
+                'collection' => $this->buildCollectionRelationJson($this->model->{$name}(), $name, $columns, $callback),
+                'many_to_many' => $this->buildManyToManyJson($this->model->{$name}(), $name, $columns, $callback),
+                'nested' => $this->buildNestedRelationJson($name, $columns, $callback),
+                'polymorphic' => $this->buildPolymorphicJson($this->model->{$name}(), $name, $columns, $callback),
+                default => null,
+            };
+        } catch (\Throwable $e) {
             return null;
         }
-
-        return match ($type) {
-            'relation' => $this->buildSingleRelationJson($relation, $relationName, $columns, $callback),
-            'collection' => $this->buildCollectionRelationJson($relation, $relationName, $columns, $callback),
-            'many_to_many' => $this->buildManyToManyJson($relation, $relationName, $columns, $callback),
-            'polymorphic' => $this->buildPolymorphicJson($relation, $relationName, $columns, $callback),
-            default => null,
-        };
     }
 
     /**
      * Build count aggregation.
-     *
-     * @param array $countConfig
-     * @return string|null
      */
     public function buildCount(array $countConfig): ?string
     {
-        $relationName = $countConfig['name'];
-        $relation = $this->model->{$relationName}();
+        $name = $countConfig['name'];
+        $callback = $countConfig['callback'] ?? null;
 
-        if (!$relation instanceof Relation) {
+        if (!method_exists($this->model, $name)) {
             return null;
         }
 
-        $relatedTable = $relation->getRelated()->getTable();
-        $foreignKey = $this->getForeignKey($relation);
-        $localKey = $this->getLocalKey($relation);
+        try {
+            $relation = $this->model->{$name}();
+            if (!$relation instanceof Relation) return null;
 
-        $baseTable = $this->model->getTable();
-        $baseKey = $this->model->getKeyName();
+            $relatedTable = $relation->getRelated()->getTable();
+            $foreignKey = $this->getForeignKey($relation);
+            $baseTable = $this->model->getTable();
+            $baseKey = $this->getLocalKey($relation);
 
-        $callback = $countConfig['callback'] ?? null;
-        $whereClause = '';
+            $whereClause = '';
+            if ($callback) {
+                $subQuery = $relation->getRelated()->newQuery();
+                $callback($subQuery);
+                $wheres = $subQuery->getQuery()->wheres;
+                $subBindings = $subQuery->getQuery()->getBindings();
+                $clause = $this->buildWhereClause($wheres, $relatedTable, $subBindings);
+                if ($clause) $whereClause = " AND {$clause}";
+            }
 
-        $subQuery = $relation->getQuery();
-        if ($callback) {
-            $callback($subQuery);
+            // Handle BelongsToMany
+            if ($relation instanceof BelongsToMany || $relation instanceof MorphToMany) {
+                $pivotTable = $relation->getTable();
+                $foreignPivotKey = $relation->getForeignPivotKeyName();
+                $relatedPivotKey = $relation->getRelatedPivotKeyName();
+                $relatedKey = $relation->getRelatedKeyName();
+
+                return "(SELECT COUNT(*) FROM {$pivotTable} " .
+                    "INNER JOIN {$relatedTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey} " .
+                    "WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}{$whereClause}) AS {$name}_count";
+            }
+
+            return "(SELECT COUNT(*) FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey}{$whereClause}) AS {$name}_count";
+        } catch (\Throwable $e) {
+            return null;
         }
-        $wheres = $subQuery->getQuery()->wheres ?? [];
-        if (!empty($wheres)) {
-            $whereClause = $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
-        }
-
-        return "(SELECT COUNT(*) FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey}{$whereClause}) AS {$relationName}_count";
     }
 
     /**
      * Build JSON for single relation (belongsTo, hasOne).
-     * Supports translations by joining with the translations table.
-     *
-     * @param Relation $relation
-     * @param string $relationName
-     * @param array $columns
-     * @param \Closure|null $callback
-     * @return string
+     * Supports translations.
      */
     protected function buildSingleRelationJson(
         Relation $relation,
         string $relationName,
         array $columns,
         ?\Closure $callback
-    ): string {
+    ): ?string {
         $relatedModel = $relation->getRelated();
         $relatedTable = $relatedModel->getTable();
-        
         $baseTable = $this->model->getTable();
-        $baseKey = $this->model->getKeyName();
 
-        // Check if related model uses translations and get metadata
-        $meta = $this->getTranslationMetadata($relatedModel);
-        $translatableFields = $meta['fields'];
-        $hasTranslations = !empty($translatableFields) && !empty($meta['table']);
-        
-        // Get locale
-        $locale = $this->locale ?? app()->getLocale();
-        
-        // Build translations table name and alias
-        $translationsTable = $meta['table'];
-        $translationsAlias = $relationName . '_trans';
-        
-        // Resolve columns (get all requested columns)
-        $requestedColumns = in_array('*', $columns) 
-            ? array_merge([$relatedModel->getKeyName()], $relatedModel->getFillable())
-            : $columns;
-        
-        // Add timestamps if needed
-        if (in_array('*', $columns) && $relatedModel->usesTimestamps()) {
-            $requestedColumns[] = $relatedModel->getCreatedAtColumn();
-            $requestedColumns[] = $relatedModel->getUpdatedAtColumn();
-        }
-        $requestedColumns = array_unique($requestedColumns);
-        
-        // Build JSON pairs - separating main table columns from translated columns
-        $jsonPairs = [];
-        foreach ($requestedColumns as $col) {
-            $jsonPairs[] = "'{$col}'";
-            if ($hasTranslations && in_array($col, $translatableFields)) {
-                // Get from translations table
-                $jsonPairs[] = "{$translationsAlias}.{$col}";
-            } else {
-                // Get from main table
-                $jsonPairs[] = "{$relatedTable}.{$col}";
+        [$dbColumns, $transColumns] = $this->resolveRequestedColumns($relatedModel, $columns);
+        $jsonPairs = $this->buildJsonPairs($dbColumns, $relatedTable);
+
+        // Translation JOIN support
+        $transJoin = '';
+        if (!empty($transColumns) && $this->locale) {
+            $meta = TranslationResolver::getMetadata($relatedModel);
+            if ($meta['table']) {
+                $transAlias = "trans_{$relationName}";
+                $transJoin = " LEFT JOIN {$meta['table']} AS {$transAlias} ON {$relatedTable}.{$relatedModel->getKeyName()} = {$transAlias}.{$meta['foreign_key']} AND {$transAlias}.locale = ?";
+                $this->bindings[] = $this->locale;
+
+                foreach ($transColumns as $tc) {
+                    $jsonPairs .= ", '{$tc}', {$transAlias}.{$tc}";
+                }
             }
         }
 
-        $jsonSql = $this->jsonFunction . '(' . implode(', ', $jsonPairs) . ')';
+        $jsonFunc = $this->getJsonFunction();
 
-        // Build JOIN clause for translations if needed
-        $joinClause = '';
-        if ($hasTranslations) {
-            $relatedKey = $relatedModel->getKeyName();
-            $foreignKeyInTranslations = $meta['foreign_key'] ?? ($this->getSingular($relatedTable) . '_id');
-            $joinClause = " LEFT JOIN {$translationsTable} AS {$translationsAlias} ON {$relatedTable}.{$relatedKey} = {$translationsAlias}.{$foreignKeyInTranslations} AND {$translationsAlias}.locale = '{$locale}'";
-        }
-
-        // Build WHERE clause from relation and callback
-        $whereClause = '';
-        $subQuery = $relation->getQuery();
-        if ($callback) {
-            $callback($subQuery);
-        }
-        $wheres = $subQuery->getQuery()->wheres ?? [];
-        if (!empty($wheres)) {
-            $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
-        }
-
-        // Check if it's a BelongsTo relation (foreign key is in base table)
-        // or HasOne (foreign key is in related table)
-        if ($relation instanceof \Illuminate\Database\Eloquent\Relations\BelongsTo) {
-            // BelongsTo: foreign key in base table, owner key in related table
-            $foreignKeyName = $relation->getForeignKeyName();
-            $ownerKeyName = $relation->getOwnerKeyName();
-            return "(SELECT {$jsonSql} FROM {$relatedTable}{$joinClause} WHERE {$relatedTable}.{$ownerKeyName} = {$baseTable}.{$foreignKeyName}{$whereClause} LIMIT 1) AS {$relationName}";
+        // Build WHERE JOIN condition
+        if ($relation instanceof BelongsTo) {
+            $foreignKey = $relation->getForeignKeyName();
+            $ownerKey = $relation->getOwnerKeyName();
+            $joinCondition = "{$relatedTable}.{$ownerKey} = {$baseTable}.{$foreignKey}";
         } else {
-            // HasOne: foreign key in related table, local key in base table
             $foreignKey = $this->getForeignKey($relation);
             $localKey = $this->getLocalKey($relation);
-            return "(SELECT {$jsonSql} FROM {$relatedTable}{$joinClause} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$localKey}{$whereClause} LIMIT 1) AS {$relationName}";
+            $joinCondition = "{$relatedTable}.{$foreignKey} = {$baseTable}.{$localKey}";
         }
+
+        // Extra WHERE from callback
+        $extraWhere = '';
+        if ($callback) {
+            $subQuery = $relatedModel->newQuery();
+            $callback($subQuery);
+            $wheres = $subQuery->getQuery()->wheres;
+            $subBindings = $subQuery->getQuery()->getBindings();
+            $clause = $this->buildWhereClause($wheres, $relatedTable, $subBindings);
+            if ($clause) $extraWhere = " AND {$clause}";
+        }
+
+        $alias = str_replace('.', '_', $relationName);
+
+        return "(SELECT {$jsonFunc}({$jsonPairs}) FROM {$relatedTable}{$transJoin} WHERE {$joinCondition}{$extraWhere} LIMIT 1) AS `{$alias}`";
     }
 
     /**
      * Build JSON array for collection relation (hasMany, hasManyThrough).
-     * Supports translations by joining with the translations table.
-     *
-     * @param Relation $relation
-     * @param string $relationName
-     * @param array $columns
-     * @param \Closure|null $callback
-     * @return string
+     * Supports translations.
      */
     protected function buildCollectionRelationJson(
         Relation $relation,
         string $relationName,
         array $columns,
         ?\Closure $callback
-    ): string {
+    ): ?string {
         $relatedModel = $relation->getRelated();
         $relatedTable = $relatedModel->getTable();
+        $baseTable = $this->model->getTable();
         $foreignKey = $this->getForeignKey($relation);
         $localKey = $this->getLocalKey($relation);
 
-        $baseTable = $this->model->getTable();
-        $baseKey = $this->model->getKeyName();
+        [$dbColumns, $transColumns] = $this->resolveRequestedColumns($relatedModel, $columns);
+        $jsonPairs = $this->buildJsonPairs($dbColumns, $relatedTable);
 
-        // Check if related model uses translations and get metadata
-        $meta = $this->getTranslationMetadata($relatedModel);
-        $translatableFields = $meta['fields'];
-        $hasTranslations = !empty($translatableFields) && !empty($meta['table']);
-        
-        // Get locale
-        $locale = $this->locale ?? app()->getLocale();
-        
-        // Build translations table name and alias
-        $translationsTable = $meta['table'];
-        $translationsAlias = $relationName . '_trans';
-        
-        // Resolve columns (get all requested columns)
-        $requestedColumns = in_array('*', $columns) 
-            ? array_merge([$relatedModel->getKeyName()], $relatedModel->getFillable())
-            : $columns;
-        
-        // Add timestamps if needed
-        if (in_array('*', $columns) && $relatedModel->usesTimestamps()) {
-            $requestedColumns[] = $relatedModel->getCreatedAtColumn();
-            $requestedColumns[] = $relatedModel->getUpdatedAtColumn();
-        }
-        $requestedColumns = array_unique($requestedColumns);
-        
-        // Build JSON pairs - separating main table columns from translated columns
-        $jsonPairs = [];
-        foreach ($requestedColumns as $col) {
-            $jsonPairs[] = "'{$col}'";
-            if ($hasTranslations && in_array($col, $translatableFields)) {
-                $jsonPairs[] = "{$translationsAlias}.{$col}";
-            } else {
-                $jsonPairs[] = "{$relatedTable}.{$col}";
+        // Translation JOIN support
+        $transJoin = '';
+        if (!empty($transColumns) && $this->locale) {
+            $meta = TranslationResolver::getMetadata($relatedModel);
+            if ($meta['table']) {
+                $transAlias = "trans_{$relationName}";
+                $transJoin = " LEFT JOIN {$meta['table']} AS {$transAlias} ON {$relatedTable}.{$relatedModel->getKeyName()} = {$transAlias}.{$meta['foreign_key']} AND {$transAlias}.locale = ?";
+                $this->bindings[] = $this->locale;
+
+                foreach ($transColumns as $tc) {
+                    $jsonPairs .= ", '{$tc}', {$transAlias}.{$tc}";
+                }
             }
         }
 
-        $jsonSql = $this->jsonFunction . '(' . implode(', ', $jsonPairs) . ')';
+        $jsonFunc = $this->getJsonFunction();
+        $jsonAgg = $this->getJsonArrayAgg();
 
-        // Build JOIN clause for translations if needed
-        $joinClause = '';
-        if ($hasTranslations) {
-            $relatedKey = $relatedModel->getKeyName();
-            $foreignKeyInTranslations = $meta['foreign_key'] ?? ($this->getSingular($relatedTable) . '_id');
-            $joinClause = " LEFT JOIN {$translationsTable} AS {$translationsAlias} ON {$relatedTable}.{$relatedKey} = {$translationsAlias}.{$foreignKeyInTranslations} AND {$translationsAlias}.locale = '{$locale}'";
-        }
-
-        // Build WHERE clause from relation and callback
-        $whereClause = '';
-        $subQuery = $relation->getQuery();
+        // Extra WHERE from callback
+        $extraWhere = '';
+        $orderClause = '';
         if ($callback) {
+            $subQuery = $relatedModel->newQuery();
             $callback($subQuery);
-        }
-        $wheres = $subQuery->getQuery()->wheres ?? [];
-        if (!empty($wheres)) {
-            $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
+            $wheres = $subQuery->getQuery()->wheres;
+            $subBindings = $subQuery->getQuery()->getBindings();
+            $clause = $this->buildWhereClause($wheres, $relatedTable, $subBindings);
+            if ($clause) $extraWhere = " AND {$clause}";
+
+            $orders = $subQuery->getQuery()->orders ?? [];
+            if (!empty($orders)) {
+                $orderParts = array_map(fn($o) => "{$relatedTable}.{$o['column']} {$o['direction']}", $orders);
+                $orderClause = ' ORDER BY ' . implode(', ', $orderParts);
+            }
         }
 
-        // Use JSON_ARRAYAGG if supported, otherwise fallback to GROUP_CONCAT for MariaDB 10.4
-        if ($this->supportsJsonArrayAgg) {
-            $arrayAgg = "JSON_ARRAYAGG({$jsonSql})";
-        } else {
-            $arrayAgg = "CONCAT('[', COALESCE(GROUP_CONCAT({$jsonSql} SEPARATOR ','), ''), ']')";
+        $alias = str_replace('.', '_', $relationName);
+
+        if ($this->driver === 'pgsql') {
+            return "(SELECT COALESCE(json_agg({$jsonFunc}({$jsonPairs}){$orderClause}), '[]'::json) FROM {$relatedTable}{$transJoin} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$localKey}{$extraWhere}) AS \"{$alias}\"";
         }
 
-        return "(SELECT {$arrayAgg} FROM {$relatedTable}{$joinClause} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey}{$whereClause}) AS {$relationName}";
+        return "(SELECT COALESCE(CONCAT('[', GROUP_CONCAT({$jsonFunc}({$jsonPairs}){$orderClause}), ']'), '[]') FROM {$relatedTable}{$transJoin} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$localKey}{$extraWhere}) AS `{$alias}`";
     }
 
     /**
      * Build JSON for nested relations (e.g., 'profile.company.country').
-     *
-     * @param string $relationPath
-     * @param array $columns
-     * @param \Closure|null $callback
-     * @return string
      */
-    protected function buildNestedRelationJson(string $relationPath, array $columns, ?\Closure $callback): string
+    protected function buildNestedRelationJson(string $relationPath, array $columns, ?\Closure $callback): ?string
     {
-        // Split the path into parts (e.g., 'category.parent' -> ['category', 'parent'])
         $parts = explode('.', $relationPath);
-        $firstRelation = $parts[0];
-        
-        // Check if first relation exists
-        if (!method_exists($this->model, $firstRelation)) {
-            throw new \BadMethodCallException("Relation {$firstRelation} does not exist on model " . get_class($this->model));
+        $alias = str_replace('.', '_', $relationPath);
+
+        if (count($parts) < 2) return null;
+
+        $currentModel = $this->model;
+        $selectParts = [];
+        $fromTable = '';
+        $joins = [];
+
+        foreach ($parts as $i => $part) {
+            if (!method_exists($currentModel, $part)) return null;
+            $relation = $currentModel->{$part}();
+            if (!$relation instanceof Relation) return null;
+
+            $relatedModel = $relation->getRelated();
+            $relatedTable = $relatedModel->getTable();
+
+            if ($i === 0) {
+                $fromTable = $relatedTable;
+                if ($relation instanceof BelongsTo) {
+                    $foreignKey = $relation->getForeignKeyName();
+                    $ownerKey = $relation->getOwnerKeyName();
+                    $joins[] = ['condition' => "{$relatedTable}.{$ownerKey} = {$this->model->getTable()}.{$foreignKey}", 'table' => $relatedTable];
+                } else {
+                    $fk = $this->getForeignKey($relation);
+                    $lk = $this->getLocalKey($relation);
+                    $joins[] = ['condition' => "{$relatedTable}.{$fk} = {$this->model->getTable()}.{$lk}", 'table' => $relatedTable];
+                }
+            } else {
+                $prevTable = $parts[$i - 1] . '_table';
+                $prevModel = $currentModel;
+                if ($relation instanceof BelongsTo) {
+                    $joins[] = ['type' => 'INNER JOIN', 'table' => $relatedTable, 'condition' => "{$relatedTable}.{$relation->getOwnerKeyName()} = {$fromTable}.{$relation->getForeignKeyName()}"];
+                }
+            }
+
+            if ($i === count($parts) - 1) {
+                $resolvedCols = $this->resolveColumns($relatedModel, $columns);
+                $selectParts = $this->buildJsonPairs($resolvedCols, $relatedTable);
+            }
+
+            $currentModel = $relatedModel;
+            $fromTable = $relatedTable;
         }
-        
-        $relation = $this->model->{$firstRelation}();
-        
-        // Replace dots with underscores for valid SQL alias
-        $aliasName = str_replace('.', '_', $relationPath);
-        
-        // For now, we only support the first level of nesting
-        // Full nested support would require recursive SQL building which is complex
-        // Users should use Laravel's with() for deep nesting
-        return $this->buildSingleRelationJson(
-            $relation,
-            $aliasName,  // Use underscore version as alias
-            $columns,
-            $callback
-        );
+
+        $jsonFunc = $this->getJsonFunction();
+        $mainJoin = $joins[0]['condition'] ?? '';
+
+        $joinSql = '';
+        for ($i = 1; $i < count($joins); $i++) {
+            $j = $joins[$i];
+            $type = $j['type'] ?? 'INNER JOIN';
+            $joinSql .= " {$type} {$j['table']} ON {$j['condition']}";
+        }
+
+        $firstTable = $joins[0]['table'] ?? $fromTable;
+
+        return "(SELECT {$jsonFunc}({$selectParts}) FROM {$firstTable}{$joinSql} WHERE {$mainJoin} LIMIT 1) AS `{$alias}`";
     }
 
     /**
      * Build JSON for belongsToMany or morphToMany relation.
-     * Supports translations by joining with the translations table.
-     *
-     * @param Relation $relation
-     * @param string $relationName
-     * @param array $columns
-     * @param \Closure|null $callback
-     * @return string
+     * Supports translations.
      */
     protected function buildManyToManyJson(
         Relation $relation,
         string $relationName,
         array $columns,
         ?\Closure $callback
-    ): string {
+    ): ?string {
         $relatedModel = $relation->getRelated();
         $relatedTable = $relatedModel->getTable();
-        $pivotTable = $relation->getTable();
-        
         $baseTable = $this->model->getTable();
         $baseKey = $this->model->getKeyName();
-        
+
+        $pivotTable = $relation->getTable();
         $foreignPivotKey = $relation->getForeignPivotKeyName();
         $relatedPivotKey = $relation->getRelatedPivotKeyName();
         $relatedKey = $relation->getRelatedKeyName();
 
-        // Check if related model uses translations and get metadata
-        $meta = $this->getTranslationMetadata($relatedModel);
-        $translatableFields = $meta['fields'];
-        $hasTranslations = !empty($translatableFields) && !empty($meta['table']);
-        
-        // Get locale
-        $locale = $this->locale ?? app()->getLocale();
-        
-        // Build translations table name and alias
-        $translationsTable = $meta['table'];
-        $translationsAlias = $relationName . '_trans';
-        
-        // Resolve columns (get all requested columns)
-        $requestedColumns = in_array('*', $columns) 
-            ? array_merge([$relatedModel->getKeyName()], $relatedModel->getFillable())
-            : $columns;
-        
-        // Add timestamps if needed
-        if (in_array('*', $columns) && $relatedModel->usesTimestamps()) {
-            $requestedColumns[] = $relatedModel->getCreatedAtColumn();
-            $requestedColumns[] = $relatedModel->getUpdatedAtColumn();
-        }
-        $requestedColumns = array_unique($requestedColumns);
-        
-        // Build JSON pairs - separating main table columns from translated columns
-        $jsonPairs = [];
-        foreach ($requestedColumns as $col) {
-            $jsonPairs[] = "'{$col}'";
-            if ($hasTranslations && in_array($col, $translatableFields)) {
-                $jsonPairs[] = "{$translationsAlias}.{$col}";
-            } else {
-                $jsonPairs[] = "{$relatedTable}.{$col}";
+        [$dbColumns, $transColumns] = $this->resolveRequestedColumns($relatedModel, $columns);
+        $jsonPairs = $this->buildJsonPairs($dbColumns, $relatedTable);
+
+        // Translation JOIN support
+        $transJoin = '';
+        if (!empty($transColumns) && $this->locale) {
+            $meta = TranslationResolver::getMetadata($relatedModel);
+            if ($meta['table']) {
+                $transAlias = "trans_{$relationName}";
+                $transJoin = " LEFT JOIN {$meta['table']} AS {$transAlias} ON {$relatedTable}.{$relatedModel->getKeyName()} = {$transAlias}.{$meta['foreign_key']} AND {$transAlias}.locale = ?";
+                $this->bindings[] = $this->locale;
+
+                foreach ($transColumns as $tc) {
+                    $jsonPairs .= ", '{$tc}', {$transAlias}.{$tc}";
+                }
             }
         }
 
-        $jsonSql = $this->jsonFunction . '(' . implode(', ', $jsonPairs) . ')';
+        $jsonFunc = $this->getJsonFunction();
 
-        // Build JOIN clause for translations if needed
-        $translationJoinClause = '';
-        if ($hasTranslations) {
-            $modelKey = $relatedModel->getKeyName();
-            $foreignKeyInTranslations = $meta['foreign_key'] ?? ($this->getSingular($relatedTable) . '_id');
-            $translationJoinClause = " LEFT JOIN {$translationsTable} AS {$translationsAlias} ON {$relatedTable}.{$modelKey} = {$translationsAlias}.{$foreignKeyInTranslations} AND {$translationsAlias}.locale = '{$locale}'";
-        }
-
-        // Handle MorphToMany specific conditions (e.g., taggable_type)
+        // Morph type condition
         $morphCondition = '';
-        if ($relation instanceof \Illuminate\Database\Eloquent\Relations\MorphToMany) {
+        if ($relation instanceof MorphToMany) {
             $morphType = $relation->getMorphType();
             $morphClass = $relation->getMorphClass();
-            $morphCondition = " AND {$pivotTable}.{$morphType} = '{$morphClass}'";
+            $morphCondition = " AND {$pivotTable}.{$morphType} = ?";
+            $this->bindings[] = $morphClass;
         }
 
-        // Use JSON_ARRAYAGG if supported, otherwise fallback to GROUP_CONCAT
-        if ($this->supportsJsonArrayAgg) {
-            $arrayAgg = "JSON_ARRAYAGG({$jsonSql})";
-        } else {
-            $arrayAgg = "CONCAT('[', COALESCE(GROUP_CONCAT({$jsonSql} SEPARATOR ','), ''), ']')";
-        }
-
-        // Build WHERE clause from relation and callback
-        $whereClause = '';
-        $subQuery = $relation->getQuery();
+        // Extra WHERE from callback
+        $extraWhere = '';
         if ($callback) {
+            $subQuery = $relatedModel->newQuery();
             $callback($subQuery);
-        }
-        $wheres = $subQuery->getQuery()->wheres ?? [];
-        if (!empty($wheres)) {
-            $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
+            $wheres = $subQuery->getQuery()->wheres;
+            $subBindings = $subQuery->getQuery()->getBindings();
+            $clause = $this->buildWhereClause($wheres, $relatedTable, $subBindings);
+            if ($clause) $extraWhere = " AND {$clause}";
         }
 
-        return "(SELECT {$arrayAgg} FROM {$relatedTable} INNER JOIN {$pivotTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey}{$translationJoinClause} WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}{$morphCondition}{$whereClause}) AS {$relationName}";
+        $alias = str_replace('.', '_', $relationName);
+
+        if ($this->driver === 'pgsql') {
+            return "(SELECT COALESCE(json_agg(json_build_object({$jsonPairs})), '[]'::json) " .
+                "FROM {$pivotTable} " .
+                "INNER JOIN {$relatedTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey}{$transJoin} " .
+                "WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}{$morphCondition}{$extraWhere}" .
+                ") AS \"{$alias}\"";
+        }
+
+        return "(SELECT COALESCE(CONCAT('[', GROUP_CONCAT({$jsonFunc}({$jsonPairs})), ']'), '[]') " .
+            "FROM {$pivotTable} " .
+            "INNER JOIN {$relatedTable} ON {$relatedTable}.{$relatedKey} = {$pivotTable}.{$relatedPivotKey}{$transJoin} " .
+            "WHERE {$pivotTable}.{$foreignPivotKey} = {$baseTable}.{$baseKey}{$morphCondition}{$extraWhere}" .
+            ") AS `{$alias}`";
     }
 
     /**
      * Build JSON for polymorphic relation.
-     *
-     * @param Relation $relation
-     * @param string $relationName
-     * @param array $columns
-     * @param \Closure|null $callback
-     * @return string
      */
     protected function buildPolymorphicJson(
         Relation $relation,
         string $relationName,
         array $columns,
         ?\Closure $callback
-    ): string {
+    ): ?string {
         $relatedModel = $relation->getRelated();
         $relatedTable = $relatedModel->getTable();
-        
         $baseTable = $this->model->getTable();
         $baseKey = $this->model->getKeyName();
-        
-        $morphType = $relation->getMorphType();
+
+        $morphType = '';
+        $morphId = '';
         $morphClass = get_class($this->model);
-        $foreignKey = $relation->getForeignKeyName();
 
-        // Resolve columns
-        $resolvedColumns = $this->resolveColumns($relatedModel, $columns);
+        if (method_exists($relation, 'getMorphType')) {
+            $morphType = $relation->getMorphType();
+            $morphId = $relation->getForeignKeyName();
+        }
 
-        // Build JSON object
-        $jsonPairs = $this->buildJsonPairs($resolvedColumns, $relatedTable);
+        $resolvedCols = $this->resolveColumns($relatedModel, $columns);
+        $jsonPairs = $this->buildJsonPairs($resolvedCols, $relatedTable);
+        $jsonFunc = $this->getJsonFunction();
 
-        $jsonSql = $this->jsonFunction . '(' . implode(', ', $jsonPairs) . ')';
-
-        // Build WHERE clause from relation and callback
-        $whereClause = '';
-        $subQuery = $relation->getQuery();
+        $extraWhere = '';
         if ($callback) {
+            $subQuery = $relatedModel->newQuery();
             $callback($subQuery);
-        }
-        $wheres = $subQuery->getQuery()->wheres ?? [];
-        if (!empty($wheres)) {
-            $whereClause = ' AND ' . $this->buildWhereClause($wheres, $relatedTable, $subQuery->getBindings());
+            $wheres = $subQuery->getQuery()->wheres;
+            $subBindings = $subQuery->getQuery()->getBindings();
+            $clause = $this->buildWhereClause($wheres, $relatedTable, $subBindings);
+            if ($clause) $extraWhere = " AND {$clause}";
         }
 
-        return "(SELECT {$jsonSql} FROM {$relatedTable} WHERE {$relatedTable}.{$foreignKey} = {$baseTable}.{$baseKey} AND {$relatedTable}.{$morphType} = '{$morphClass}'{$whereClause} LIMIT 1) AS {$relationName}";
+        $alias = str_replace('.', '_', $relationName);
+
+        // Use parameterized binding for morph class
+        $this->bindings[] = $morphClass;
+
+        if ($this->driver === 'pgsql') {
+            return "(SELECT COALESCE(json_agg(json_build_object({$jsonPairs})), '[]'::json) " .
+                "FROM {$relatedTable} WHERE {$relatedTable}.{$morphId} = {$baseTable}.{$baseKey} AND {$relatedTable}.{$morphType} = ?{$extraWhere}) AS \"{$alias}\"";
+        }
+
+        return "(SELECT COALESCE(CONCAT('[', GROUP_CONCAT({$jsonFunc}({$jsonPairs})), ']'), '[]') " .
+            "FROM {$relatedTable} WHERE {$relatedTable}.{$morphId} = {$baseTable}.{$baseKey} AND {$relatedTable}.{$morphType} = ?{$extraWhere}) AS `{$alias}`";
+    }
+
+    // =========================================================================
+    // COLUMN HELPERS
+    // =========================================================================
+
+    /**
+     * Resolve requested columns for a model (with translation awareness).
+     * Returns [dbColumns, translatableColumns].
+     */
+    protected function resolveRequestedColumns(Model $model, array $columns): array
+    {
+        if ($columns === ['*']) {
+            $all = $model->getFillable();
+            if (empty($all)) {
+                $all = $this->getModelColumns($model);
+            }
+            $all = array_merge([$model->getKeyName()], $all);
+            $all = array_unique($all);
+        } else {
+            $all = $columns;
+        }
+
+        if (!TranslationResolver::modelHasTranslations($model) || !$this->locale) {
+            return [$all, []];
+        }
+
+        $transFields = TranslationResolver::getTranslatableFields($model);
+        $dbCols = array_values(array_diff($all, $transFields));
+        $transCols = array_values(array_intersect($all, $transFields));
+
+        return [$dbCols, $transCols];
     }
 
     /**
-     * Resolve columns for a model.
-     * Excludes translatable columns if the model uses HasTranslations trait.
-     *
-     * @param Model $model
-     * @param array $columns
-     * @return array
+     * Resolve columns for a model, excluding translatable columns.
      */
     protected function resolveColumns(Model $model, array $columns): array
     {
-        $meta = $this->getTranslationMetadata($model);
-        $translatableFields = $meta['fields'];
-
-        if (in_array('*', $columns)) {
-            $fillable = $model->getFillable();
-            $columns = array_merge([$model->getKeyName()], $fillable);
-            
-            if ($model->usesTimestamps()) {
-                $columns[] = $model->getCreatedAtColumn();
-                $columns[] = $model->getUpdatedAtColumn();
+        if ($columns === ['*']) {
+            $all = $model->getFillable();
+            if (empty($all)) {
+                $all = $this->getModelColumns($model);
             }
-
-            // ✅ Check if related model uses translations and exclude translatable columns
-            if (!empty($translatableFields)) {
-                $columns = array_filter($columns, function ($col) use ($translatableFields) {
-                    return !in_array($col, $translatableFields);
-                });
-            }
-        } else {
-            // ✅ Even for explicit columns, filter out translatable ones
-            if (!empty($translatableFields)) {
-                $columns = array_filter($columns, function ($col) use ($translatableFields) {
-                    return !in_array($col, $translatableFields);
-                });
-            }
+            return array_merge([$model->getKeyName()], $all);
         }
-
-        return array_unique(array_values($columns));
-    }
-
-    /**
-     * Get translatable fields and metadata from a model.
-     *
-     * @param Model $model
-     * @return array{fields: array, table: string|null, foreign_key: string|null}
-     */
-    protected function getTranslationMetadata(Model $model): array
-    {
-        $traits = class_uses_recursive($model);
-        $isTranslatable = false;
-        
-        foreach ($traits as $trait) {
-            if (str_contains($trait, 'HasTranslations') || str_contains($trait, 'Translatable')) {
-                $isTranslatable = true;
-                break;
-            }
-        }
-
-        // If not translatable by trait/property/method, return empty
-        $hasProperty = property_exists($model, 'translatable');
-        $hasMethod = method_exists($model, 'getTranslatableAttributes');
-        $hasTranslationMethod = method_exists($model, 'translations');
-
-        if (!$isTranslatable && !$hasProperty && !$hasMethod && !$hasTranslationMethod) {
-            return ['fields' => [], 'table' => null, 'foreign_key' => null];
-        }
-
-        // Get translatable fields
-        $fields = [];
-        if ($hasProperty) {
-            $fields = (array) $model->translatable;
-        } elseif ($hasMethod) {
-            $fields = (array) $model->getTranslatableAttributes();
-        }
-
-        if (empty($fields)) {
-            return ['fields' => [], 'table' => null, 'foreign_key' => null];
-        }
-
-        // Try to get metadata from the 'translations' relation if it exists
-        $table = null;
-        $foreignKey = null;
-
-        try {
-            if ($hasTranslationMethod || method_exists($model, 'getTranslationModelName')) {
-                $relation = $model->translations();
-                if ($relation instanceof \Illuminate\Database\Eloquent\Relations\HasMany) {
-                    $table = $relation->getRelated()->getTable();
-                    $foreignKey = $relation->getForeignKeyName();
-                }
-            }
-        } catch (\Throwable $e) {
-            // Fallback to guessing if relation call fails
-        }
-
-        // Final fallback: Guessing (The smart way)
-        if (!$table) {
-            $baseTable = $model->getTable();
-            $singular = $this->getSingular($baseTable);
-            $table = $singular . '_translations';
-            $foreignKey = $singular . '_id';
-        }
-
-        return [
-            'fields' => $fields,
-            'table' => $table,
-            'foreign_key' => $foreignKey
-        ];
+        return $columns;
     }
 
     /**
      * Build JSON pairs for JSON_OBJECT function.
-     *
-     * @param array $columns
-     * @param string $table
-     * @return array
      */
-    protected function buildJsonPairs(array $columns, string $table): array
+    protected function buildJsonPairs(array $columns, string $table): string
     {
         $pairs = [];
-
-        foreach ($columns as $column) {
-            $pairs[] = "'{$column}'";
-            $pairs[] = "{$table}.{$column}";
+        foreach ($columns as $col) {
+            $pairs[] = "'{$col}', {$table}.{$col}";
         }
-
-        return $pairs;
+        return implode(', ', $pairs);
     }
 
     /**
      * Get foreign key from relation.
-     *
-     * @param Relation $relation
-     * @return string
      */
     protected function getForeignKey(Relation $relation): string
     {
         if (method_exists($relation, 'getForeignKeyName')) {
             return $relation->getForeignKeyName();
         }
-
-        if (method_exists($relation, 'getForeignKey')) {
-            return $relation->getForeignKey();
+        if (method_exists($relation, 'getQualifiedForeignKeyName')) {
+            return last(explode('.', $relation->getQualifiedForeignKeyName()));
         }
-
-        // Default fallback
-        $relatedModel = $relation->getRelated();
         return $this->model->getForeignKey();
     }
 
     /**
      * Get local key from relation.
-     *
-     * @param Relation $relation
-     * @return string
      */
     protected function getLocalKey(Relation $relation): string
     {
-        if (method_exists($relation, 'getOwnerKeyName')) {
-            return $relation->getOwnerKeyName();
-        }
-
         if (method_exists($relation, 'getLocalKeyName')) {
             return $relation->getLocalKeyName();
         }
-
+        if (method_exists($relation, 'getQualifiedParentKeyName')) {
+            return last(explode('.', $relation->getQualifiedParentKeyName()));
+        }
         return $this->model->getKeyName();
     }
 
     /**
-     * Get singular form of a table name.
-     * Used to build translation table names (e.g., 'categories' -> 'category_translations').
-     *
-     * @param string $table
-     * @return string
+     * Get columns from a model's table.
      */
-    protected function getSingular(string $table): string
+    protected function getModelColumns(Model $model): array
     {
-        // Use Laravel's Str::singular if available
-        if (class_exists(\Illuminate\Support\Str::class)) {
-            return \Illuminate\Support\Str::singular($table);
+        try {
+            $table = $model->getTable();
+            return match ($this->driver) {
+                'mysql', 'mariadb' => array_column(DB::select("SHOW COLUMNS FROM {$table}"), 'Field'),
+                'pgsql' => array_column(DB::select("SELECT column_name FROM information_schema.columns WHERE table_name = ?", [$table]), 'column_name'),
+                'sqlite' => array_column(DB::select("PRAGMA table_info({$table})"), 'name'),
+                default => array_column(DB::select("SHOW COLUMNS FROM {$table}"), 'Field'),
+            };
+        } catch (\Throwable $e) {
+            return [];
         }
-
-        // Simple fallback for common cases
-        if (str_ends_with($table, 'ies')) {
-            return substr($table, 0, -3) . 'y';
-        }
-        if (str_ends_with($table, 'es')) {
-            return substr($table, 0, -2);
-        }
-        if (str_ends_with($table, 's')) {
-            return substr($table, 0, -1);
-        }
-
-        return $table;
     }
+
+    // =========================================================================
+    // WHERE CLAUSE BUILDER
+    // =========================================================================
 
     /**
      * Build WHERE clause from query wheres.
-     *
-     * @param array $wheres
-     * @param string $table
-     * @return string
+     * Uses parameterized bindings for safety.
      */
     protected function buildWhereClause(array $wheres, string $table, array $baseBindings = []): string
     {
-        $conditions = [];
+        $parts = [];
         $bindingIndex = 0;
 
         foreach ($wheres as $where) {
-            $column = $where['column'] ?? null;
-            $operator = $where['operator'] ?? '=';
-            $value = $where['value'] ?? null;
+            $type = $where['type'] ?? 'Basic';
+            $boolean = strtoupper($where['boolean'] ?? 'and');
+            $prefix = empty($parts) ? '' : " {$boolean} ";
 
-            if ($column) {
-                $fullColumn = strpos($column, '.') !== false ? $column : "{$table}.{$column}";
-                
-                if ($operator === 'IN' && is_array($value)) {
-                    $placeholders = implode(',', array_fill(0, count($value), '?'));
-                    $conditions[] = "{$fullColumn} IN ({$placeholders})";
-                    foreach ($value as $val) {
-                        $this->bindings[] = $val;
+            switch ($type) {
+                case 'Basic':
+                    $col = Str::contains($where['column'] ?? '', '.') ? $where['column'] : "{$table}.{$where['column']}";
+                    $op = $where['operator'] ?? '=';
+                    $parts[] = "{$prefix}{$col} {$op} ?";
+                    $this->bindings[] = $baseBindings[$bindingIndex] ?? $where['value'] ?? null;
+                    $bindingIndex++;
+                    break;
+
+                case 'Null':
+                    $col = Str::contains($where['column'] ?? '', '.') ? $where['column'] : "{$table}.{$where['column']}";
+                    $parts[] = "{$prefix}{$col} IS NULL";
+                    break;
+
+                case 'NotNull':
+                    $col = Str::contains($where['column'] ?? '', '.') ? $where['column'] : "{$table}.{$where['column']}";
+                    $parts[] = "{$prefix}{$col} IS NOT NULL";
+                    break;
+
+                case 'In':
+                    $col = Str::contains($where['column'] ?? '', '.') ? $where['column'] : "{$table}.{$where['column']}";
+                    $values = $where['values'] ?? [];
+                    $placeholders = implode(', ', array_fill(0, count($values), '?'));
+                    $parts[] = "{$prefix}{$col} IN ({$placeholders})";
+                    foreach ($values as $v) {
+                        $this->bindings[] = $v;
                     }
-                } else {
-                    $conditions[] = "{$fullColumn} {$operator} ?";
-                    if (isset($baseBindings[$bindingIndex])) {
-                        $this->bindings[] = $baseBindings[$bindingIndex];
-                        $bindingIndex++;
-                    } else {
-                        $this->bindings[] = $value;
+                    break;
+
+                case 'NotIn':
+                    $col = Str::contains($where['column'] ?? '', '.') ? $where['column'] : "{$table}.{$where['column']}";
+                    $values = $where['values'] ?? [];
+                    $placeholders = implode(', ', array_fill(0, count($values), '?'));
+                    $parts[] = "{$prefix}{$col} NOT IN ({$placeholders})";
+                    foreach ($values as $v) {
+                        $this->bindings[] = $v;
                     }
-                }
+                    break;
+
+                case 'Between':
+                    $col = Str::contains($where['column'] ?? '', '.') ? $where['column'] : "{$table}.{$where['column']}";
+                    $vals = $where['values'] ?? [];
+                    $not = !empty($where['not']) ? ' NOT' : '';
+                    $parts[] = "{$prefix}{$col}{$not} BETWEEN ? AND ?";
+                    $this->bindings[] = $vals[0] ?? null;
+                    $this->bindings[] = $vals[1] ?? null;
+                    break;
+
+                case 'raw':
+                    $parts[] = "{$prefix}{$where['sql']}";
+                    if (!empty($where['bindings'])) {
+                        foreach ($where['bindings'] as $b) {
+                            $this->bindings[] = $b;
+                        }
+                    }
+                    break;
+
+                default:
+                    // For unsupported types, try basic handling
+                    if (isset($where['column'], $where['value'])) {
+                        $col = Str::contains($where['column'], '.') ? $where['column'] : "{$table}.{$where['column']}";
+                        $op = $where['operator'] ?? '=';
+                        $parts[] = "{$prefix}{$col} {$op} ?";
+                        $this->bindings[] = $where['value'];
+                    }
+                    break;
             }
         }
 
-        return !empty($conditions) ? ' ' . implode(' AND ', $conditions) : '';
+        return implode('', $parts);
     }
+
+    // =========================================================================
+    // DATABASE DRIVER HELPERS
+    // =========================================================================
 
     /**
      * Detect database driver.
-     *
-     * @return string
      */
     protected function detectDriver(): string
     {
@@ -744,60 +654,34 @@ class RelationBuilder
 
     /**
      * Get JSON function based on driver.
-     *
-     * @return string
      */
     protected function getJsonFunction(): string
     {
-        $configFunction = config('optimized-queries.json_function', 'auto');
-        
-        if ($configFunction !== 'auto') {
-            return $configFunction;
-        }
+        $configFunc = config('optimized-queries.json_function', 'auto');
+        if ($configFunc !== 'auto') return $configFunc;
 
         return match ($this->driver) {
-            'mysql' => 'JSON_OBJECT',
-            'pgsql' => 'JSON_BUILD_OBJECT',
-            'sqlite' => 'JSON_OBJECT',
+            'pgsql' => 'json_build_object',
             default => 'JSON_OBJECT',
         };
     }
 
     /**
+     * Get JSON array aggregation function.
+     */
+    protected function getJsonArrayAgg(): string
+    {
+        return match ($this->driver) {
+            'pgsql' => 'json_agg',
+            default => 'JSON_ARRAYAGG',
+        };
+    }
+
+    /**
      * Check if database supports JSON_ARRAYAGG function.
-     *
-     * @return bool
      */
     protected function checkJsonArrayAggSupport(): bool
     {
-        if ($this->driver !== 'mysql') {
-            return false;
-        }
-
-        try {
-            $versionResult = DB::selectOne('SELECT VERSION() as version');
-            $version = $versionResult->version ?? '';
-
-            // Check if it's MariaDB
-            if (str_contains($version, 'MariaDB')) {
-                // Extract version number (e.g., "10.4.32-MariaDB" -> "10.4")
-                if (preg_match('/(\d+\.\d+)/', $version, $matches)) {
-                    $versionNumber = floatval($matches[1]);
-                    // JSON_ARRAYAGG available in MariaDB 10.5+
-                    return $versionNumber >= 10.5;
-                }
-                return false;
-            }
-
-            // For MySQL, JSON_ARRAYAGG available in 5.7.22+
-            if (preg_match('/^(\d+\.\d+\.\d+)/', $version, $matches)) {
-                return version_compare($matches[1], '5.7.22', '>=');
-            }
-
-            return true; // Assume support for unknown versions
-        } catch (\Exception $e) {
-            // If we can't determine version, assume no support
-            return false;
-        }
+        return in_array($this->driver, ['mysql', 'mariadb', 'pgsql']);
     }
 }

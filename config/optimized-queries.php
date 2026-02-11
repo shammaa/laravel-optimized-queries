@@ -79,7 +79,19 @@ return [
     | This allows you to see query count and execution time improvements.
     |
     */
-    'enable_performance_monitoring' => env('OPTIMIZED_QUERIES_PERFORMANCE_MONITORING', true),
+    'enable_performance_monitoring' => env('OPTIMIZED_QUERIES_PERFORMANCE_MONITORING', false),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Safe Mode (Eloquent Fallback)
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, if the optimized query fails for any reason,
+    | it will automatically fall back to standard Eloquent queries.
+    | Recommended: true in production, false in development.
+    |
+    */
+    'safe_mode' => env('OPTIMIZED_QUERIES_SAFE_MODE', true),
 
     /*
     |--------------------------------------------------------------------------
@@ -100,14 +112,44 @@ return [
     |--------------------------------------------------------------------------
     |
     | List of database drivers that support JSON aggregation.
-    | MySQL 5.7+, PostgreSQL 9.4+, SQLite 3.38+
+    | MySQL 5.7+, MariaDB 10.5+, PostgreSQL 9.4+, SQLite 3.38+
     |
     */
     'supported_drivers' => [
         'mysql',
+        'mariadb',
         'pgsql',
         'sqlite',
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Max Relations Per Query (Query Splitting)
+    |--------------------------------------------------------------------------
+    |
+    | Maximum number of relations to include in a single SQL query.
+    | If a query has more relations than this limit, it will automatically
+    | split into multiple smaller queries and merge the results.
+    |
+    | Set to 0 to disable splitting (all relations in one query).
+    | Recommended: 5-6 for large datasets, 0 for small/medium datasets.
+    |
+    */
+    'max_relations_per_query' => env('OPTIMIZED_QUERIES_MAX_RELATIONS', 0),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Query Timeout (seconds)
+    |--------------------------------------------------------------------------
+    |
+    | Maximum execution time for a single optimized query in seconds.
+    | Prevents long-running queries from blocking the application.
+    | Set to 0 to disable (use database default timeout).
+    |
+    | Works with MySQL (MAX_EXECUTION_TIME) and PostgreSQL (statement_timeout).
+    |
+    */
+    'query_timeout' => env('OPTIMIZED_QUERIES_TIMEOUT', 0),
 
     /*
     |--------------------------------------------------------------------------
